@@ -37,7 +37,14 @@ from .primitives import (
     ScoreAnswer,
 )
 
-__all__ = ["Usage", "answer", "answer_choice", "answer_noul", "answer_score"]
+__all__ = [
+    "Usage",
+    "answer",
+    "answer_choice",
+    "answer_noul",
+    "answer_score",
+    "weighted_level_score",
+]
 
 #: 思考段截断: 让模型跳过内部推理, 直接在决策位吐标签
 THINK_PREFIX = "</think>\n"
@@ -72,6 +79,20 @@ def _record_usage(usage: Usage | None, sequences: Sequence[Sequence[int]]) -> No
     """把本批序列的 token 数记进 usage (没给 usage 就什么都不做)."""
     if usage is not None:
         usage.add_input(sum(len(sequence) for sequence in sequences))
+
+
+def weighted_level_score(probabilities: Sequence[float]) -> float:
+    """档位概率 -> 概率加权分 ``Σ p_i · i``.
+
+    输入: probabilities -- 按档位编号升序的概率 (长度 = 档位数, >= 1);
+    输出: 加权分, 落在 [0, len-1];
+    预期: 空输入抛 ValueError; 只做加权, 不负责归一 (调用方给的就是受限分布)。
+    """
+    if not probabilities:
+        raise ValueError("probabilities must not be empty")
+    return sum(
+        index * float(probability) for index, probability in enumerate(probabilities)
+    )
 
 
 def _system_message(state: Any) -> dict[str, str]:
@@ -202,7 +223,7 @@ def answer_score(
     _record_usage(usage, [tokens])
     probabilities = engine.score([tokens], labels)[0]
     ordered = [probabilities[str(index)] for index in range(level_count)]
-    score = sum(index * probability for index, probability in enumerate(ordered))
+    score = weighted_level_score(ordered)
     return ScoreAnswer(
         score=score,
         legend={

@@ -20,7 +20,14 @@ from .primitives import (
     ScoreAnswer,
     parse_question,
 )
-from .scoring import Usage, answer, answer_choice, answer_noul, answer_score
+from .scoring import (
+    Usage,
+    answer,
+    answer_choice,
+    answer_noul,
+    answer_score,
+    weighted_level_score,
+)
 
 __all__ = [
     "MAX_SCORE_LEVELS",
@@ -41,4 +48,5 @@ __all__ = [
     "answer_score",
     "normalized_peak",
     "parse_question",
+    "weighted_level_score",
 ]
