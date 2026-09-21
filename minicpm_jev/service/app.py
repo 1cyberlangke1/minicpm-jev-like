@@ -118,6 +118,7 @@ def create_app(
                 questions,
                 chunk_size=resolved.chunk_size,
                 usage=usage,
+                think_tokens=body.think_tokens,
             )
             return SystemOneResponse(
                 model=model_name,

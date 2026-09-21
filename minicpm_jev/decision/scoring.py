@@ -232,20 +232,28 @@ class _Plan:
     sequences: list[list[int]]
     label_sets: list[LabelSet]
     decode: Decoder
+    #: 推理模式下的闭合标记, 由题型常量派生, 不接受外部传入
+    closure: str = INDEX_PREFIX
 
 
-def _plan_noul(engine: BatchEngine, state: Any, question: Noul) -> _Plan:
-    """noul 规划: 一条序列, 标签是 yes/no 全书写变体组."""
+def _plan_noul(
+    engine: BatchEngine, state: Any, question: Noul, think_tokens: int = 0
+) -> _Plan:
+    """noul 规划: 一条序列, 标签是 yes/no 全书写变体组.
+
+    think_tokens 大于 0 时不预填前缀, 让模型先自由推理; 推理结束后引擎把
+    THINK_PREFIX 当闭合标记强行接回去, 决策位与纯 prefill 路径落在同一处。
+    """
     labels = resolve_labels(engine.tokenize_label, BOOL_LABEL_SPECS)
     tokens = engine.render_tokens(
         _messages(state, _noul_prompt(question)),
-        assistant_prefix=THINK_PREFIX,
+        assistant_prefix="" if think_tokens else THINK_PREFIX,
     )
 
     def decode(probabilities: PerSequence) -> Answer:
         return NoulAnswer(noul=probabilities[0]["true"])
 
-    return _Plan([tokens], [labels], decode)
+    return _Plan([tokens], [labels], decode, closure=THINK_PREFIX)
 
 
 def _plan_choice(
@@ -253,8 +261,13 @@ def _plan_choice(
     state: Any,
     question: Choice,
     chunk_size: int,
+    think_tokens: int = 0,
 ) -> _Plan:
-    """choice 规划: 每个候选块一条序列, 块内局部编号 (+ 分块时的 None 锚点)."""
+    """choice 规划: 每个候选块一条序列, 块内局部编号 (+ 分块时的 None 锚点).
+
+    think_tokens 大于 0 时, 每个候选块各自先自由推理再闭合; 分块与 None 锚点
+    对齐不受影响, 代价是推理次数乘以块数。
+    """
     plan = plan_chunks(len(question.criteria), chunk_size)
     sequences: list[list[int]] = []
     label_sets: list[LabelSet] = []
@@ -265,7 +278,7 @@ def _plan_choice(
         sequences.append(
             engine.render_tokens(
                 _messages(state, _choice_prompt(question, chunk)),
-                assistant_prefix=INDEX_PREFIX,
+                assistant_prefix="" if think_tokens else INDEX_PREFIX,
             )
         )
     names = list(question.criteria)
@@ -283,13 +296,15 @@ def _plan_choice(
     return _Plan(sequences, label_sets, decode)
 
 
-def _plan_score(engine: BatchEngine, state: Any, question: Score) -> _Plan:
+def _plan_score(
+    engine: BatchEngine, state: Any, question: Score, think_tokens: int = 0
+) -> _Plan:
     """score 规划: 一条序列, 档位编号 0~M-1 天然单块 (不带锚点)."""
     level_count = len(question.criteria)
     labels = engine.numeric_labels.get(level_count, with_none=False)
     tokens = engine.render_tokens(
         _messages(state, _score_prompt(question)),
-        assistant_prefix=INDEX_PREFIX,
+        assistant_prefix="" if think_tokens else INDEX_PREFIX,
     )
 
     def decode(probabilities: PerSequence) -> Answer:
@@ -315,14 +330,15 @@ def _plan(
     state: Any,
     question: Question,
     chunk_size: int,
+    think_tokens: int = 0,
 ) -> _Plan:
     """按题型规划. 预期: 未知类型抛 TypeError, 不静默跳过."""
     if isinstance(question, Noul):
-        return _plan_noul(engine, state, question)
+        return _plan_noul(engine, state, question, think_tokens)
     if isinstance(question, Choice):
-        return _plan_choice(engine, state, question, chunk_size)
+        return _plan_choice(engine, state, question, chunk_size, think_tokens)
     if isinstance(question, Score):
-        return _plan_score(engine, state, question)
+        return _plan_score(engine, state, question, think_tokens)
     raise TypeError(f"unsupported question type: {type(question).__name__}")
 
 
@@ -333,20 +349,22 @@ def answer_all(
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     usage: Usage | None = None,
+    think_tokens: int = 0,
 ) -> dict[str, Answer]:
     """一次请求里的所有问题走**一个**批.
 
     输入: engine; state; questions -- 题名 -> 题目; chunk_size -- 候选窗口;
-          usage -- 可选统计累加器;
+          usage -- 可选统计累加器; think_tokens -- 每题允许的自由推理预算 (0 = 不推理);
     输出: 题名 -> 答案 (顺序与输入一致);
     预期: 只调一次 engine.score (同批序列由引擎按哈希去重并并行 prefill);
+          think_tokens 大于 0 时自由生成天然串行, 退化成逐题调用, 不再合批;
           questions 为空抛 ValueError, 不返回空结果。
     """
     if not questions:
         raise ValueError("questions must not be empty")
 
     plans = {
-        question_id: _plan(engine, state, question, chunk_size)
+        question_id: _plan(engine, state, question, chunk_size, think_tokens)
         for question_id, question in questions.items()
     }
     sequences: list[list[int]] = []
@@ -356,7 +374,19 @@ def answer_all(
         label_sets.extend(plan.label_sets)
 
     _record_usage(usage, sequences)
-    scored = engine.score(sequences, label_sets)
+    if think_tokens > 0:
+        scored = []
+        for plan in plans.values():
+            scored.extend(
+                engine.score(
+                    plan.sequences,
+                    plan.label_sets,
+                    think_tokens=think_tokens,
+                    closure=plan.closure,
+                )
+            )
+    else:
+        scored = engine.score(sequences, label_sets)
 
     results: dict[str, Answer] = {}
     cursor = 0
@@ -374,6 +404,7 @@ def answer(
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     usage: Usage | None = None,
+    think_tokens: int = 0,
 ) -> Answer:
     """单题决策 (answer_all 的薄包装, 方便按题调用与测试).
 
@@ -387,6 +418,7 @@ def answer(
         {"question": question},
         chunk_size=chunk_size,
         usage=usage,
+        think_tokens=think_tokens,
     )["question"]
 
 
