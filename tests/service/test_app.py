@@ -263,3 +263,15 @@ def test_alias_end_to_end(registry: ModelRegistry) -> None:
         response = client.post("/v1/systemone", json=body)
         assert response.status_code == 200
         assert response.json()["model"] == MODEL_NAME
+
+
+def test_switching_model_returns_529(
+    plain_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """换模型 / 装载的过渡态: 新请求立刻 529, 不排队等权重加载."""
+    from minicpm_jev.service import EngineManager
+
+    monkeypatch.setattr(EngineManager, "is_switching", property(lambda self: True))
+    response = plain_client.post("/v1/systemone", json=NOUL_BODY)
+    assert response.status_code == 529
+    assert response.json()["detail"]["error_type"] == "overloaded_error"
