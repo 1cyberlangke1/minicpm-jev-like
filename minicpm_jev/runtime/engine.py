@@ -1,11 +1,15 @@
 """批量推理引擎: 一次 llama_decode 处理整批序列, 只在决策位读 logits.
 
-批由 llama-cpp-python 自带的 LlamaBatch 摆 (add_sequence / set_batch), 引擎只声明
-"这条序列是哪个 seq_id", 不碰任何 ctypes 结构体字段.
+批由引擎手填原生 llama_batch 的 token/pos/seq_id/logits 四组数组 —— 库自带的
+add_sequence / set_batch 撑不起「多序列各自续接」与「公共前缀共享」两种形状。
 
 设计要点 (都是踩过坑的):
-- 通用批 (GPU): 哈希去重后每条序列一个 seq_id, 用 add_sequence 一次塞几条, 受
-  n_batch 限制; 单条就超过 n_batch 的长序列退回 set_batch 分块.
+- 公共前缀只算一遍 (GPU): 批里一行 token 可以挂多个 seq_id (llama.cpp 的
+  coupled sequences), 于是共享前缀的若干条序列把前缀行挂上全部 seq_id,
+  尾巴行各挂自己的 seq_id, 整批仍是一次 llama_decode —— 四道题共用一个
+  state 时, 前缀不再按题数重复计算.
+- 通用批 (GPU): 哈希去重后每条序列一个 seq_id, 受 n_batch 限制; 单条就超过
+  n_batch 的长序列退回 set_batch 分块.
 - CPU 档只做单序列推理, 不拼多序列批: CPU 是给没有 GPU 的机器兜底的, 一次喂一条
   就够用, 不需要批.
 - prefill-only: 不 decode 任何 token, 只在每条序列最后一个 token 上打开 logits.
@@ -69,8 +73,28 @@ def _clear_kv(memory: object) -> None:
 
     kv_unified 下 llama_memory_seq_rm(mem, -1, -1, -1) 清不干净 (实测第二次 decode
     直接报「序列位置不连续」), 必须走 llama_memory_clear.
+
+    data=False 只清元数据不擦 K/V 缓冲: 被清掉的 cell 不再属于任何序列, 下次
+    复用时会先被 decode 覆盖写入, 旧值读不到; 而擦一遍整块缓冲是 O(显存) 的,
+    默认 32k 上下文的缓冲有 1.3GB, 每请求擦一次白花几毫秒。
     """
-    llama_cpp.llama_memory_clear(memory, True)
+    llama_cpp.llama_memory_clear(memory, False)
+
+
+def _common_prefix_length(sequences: Sequence[Sequence[int]]) -> int:
+    """多条序列的最长公共前缀长度.
+
+    输入: sequences -- 非空 token 序列列表;
+    输出: 公共前缀 token 数 (可能为 0);
+    预期: 只做逐位比较, 不假设序列等长。
+    """
+    width = min(len(sequence) for sequence in sequences)
+    for index in range(width):
+        token = sequences[0][index]
+        for sequence in sequences[1:]:
+            if sequence[index] != token:
+                return index
+    return width
 
 
 def _read_logits(context: object, index: int, n_vocab: int) -> np.ndarray:
@@ -229,7 +253,8 @@ class BatchEngine:
         输入: sequences -- token id 序列列表, 每条的最后一位就是决策位
         输出: 与输入等长的 float32 logits 数组 (长度 n_vocab)
         预期: 完全相同的序列由哈希去重共享一次计算并返回逐位相同的结果;
-              去重后超过 n_seq_max 或整批 token 超过 n_ctx 直接报错, 不截断
+              共享公共前缀的多条序列把前缀只算一遍 (前缀行挂全部 seq_id);
+              去重后超过 n_seq_max 或 KV 占用的 cell 数超过 n_ctx 直接报错, 不截断
         """
         if not sequences:
             return []
@@ -252,10 +277,22 @@ class BatchEngine:
             if not key:
                 raise EngineError(f"sequence {index} is empty; no decision position")
             unique_sequences[index] = list(key)
-        total_tokens = sum(len(tokens) for tokens in unique_sequences)
-        if total_tokens > self._config.n_ctx:
+        # 共享前缀只在 GPU 批路径上做: CPU 档本来就一次一条序列 (兜底用, 不追速度)
+        shared_prefix = 0
+        if self._config.device is Device.GPU and len(unique_sequences) > 1:
+            shared_prefix = _common_prefix_length(unique_sequences)
+            # 最短的那条也要留一个尾巴 token 当决策位, 否则它的决策位落在被共享的
+            # 前缀行上, 那一行的 logits 是替多条序列一起算的, 取回来不能算它独占
+            shared_prefix = min(
+                shared_prefix, min(len(tokens) for tokens in unique_sequences) - 1
+            )
+        # 前缀行被多条序列共用只占一个 cell, 尾巴行各占各的
+        total_cells = shared_prefix + sum(
+            len(tokens) - shared_prefix for tokens in unique_sequences
+        )
+        if total_cells > self._config.n_ctx:
             raise EngineError(
-                f"batch of {total_tokens} tokens exceeds n_ctx={self._config.n_ctx}"
+                f"batch of {total_cells} tokens exceeds n_ctx={self._config.n_ctx}"
             )
 
         collected: list[np.ndarray | None] = [None] * len(unique_sequences)
@@ -263,6 +300,10 @@ class BatchEngine:
         n_batch = self._config.n_batch
         # kv_unified 下 seq_rm(-1,...) 清不干净, 必须整体 clear
         _clear_kv(self._context.memory)
+
+        if shared_prefix > 0:
+            self._eval_shared_prefix(unique_sequences, shared_prefix, collected)
+            return [collected[seq_index] for seq_index in mapping]  # type: ignore[index]
 
         index = 0
         while index < len(unique_sequences):
@@ -297,6 +338,105 @@ class BatchEngine:
             raise EngineError(f"no decision logits for sequences {missing}")
         return [collected[seq_index] for seq_index in mapping]  # type: ignore[index]
 
+    def _eval_shared_prefix(
+        self,
+        sequences: Sequence[Sequence[int]],
+        prefix_len: int,
+        collected: list[np.ndarray | None],
+    ) -> None:
+        """共享公共前缀的整批打分: 前缀行挂全部 seq_id, 尾巴行各挂自己的.
+
+        输入: sequences -- 已去重的序列; prefix_len -- 公共前缀长度 (> 0);
+              collected -- 输出槽位, 按序列下标写入决策位 logits;
+        输出: 无 (结果写进 collected);
+        预期: 装得下就整批一次 llama_decode (前缀 + 全部尾巴都在同一批里);
+              装不下时前缀按 n_batch 分块、尾巴按 n_batch 分组, 仍然是批。
+        """
+        count = len(sequences)
+        tails = [list(tokens[prefix_len:]) for tokens in sequences]
+        head = list(sequences[0][:prefix_len])
+        n_batch = self._config.n_batch
+
+        if prefix_len + sum(len(tail) for tail in tails) <= n_batch:
+            # 常见形状: 一次 decode 把前缀与全部尾巴喂完, 只调一次库
+            rows: list[tuple[list[int], int, int]] = [
+                (list(range(count)), token, position)
+                for position, token in enumerate(head)
+            ]
+            logits_at: set[int] = set()
+            for seq_index, tail in enumerate(tails):
+                for offset, token in enumerate(tail):
+                    rows.append(([seq_index], token, prefix_len + offset))
+                logits_at.add(len(rows) - 1)
+            self._fill_rows(rows, logits_at)
+            self._context.decode(self._batch)
+            cursor = prefix_len
+            for seq_index, tail in enumerate(tails):
+                collected[seq_index] = _read_logits(
+                    self._context, cursor + len(tail) - 1, self.n_vocab
+                )
+                cursor += len(tail)
+            return
+
+        # 大形状: 前缀分块喂, 每条序列的尾巴整条不拆, 按 n_batch 分组
+        for start in range(0, prefix_len, n_batch):
+            stop = min(start + n_batch, prefix_len)
+            self._fill_rows(
+                [
+                    (list(range(count)), head[position], position)
+                    for position in range(start, stop)
+                ],
+                set(),
+            )
+            self._context.decode(self._batch)
+
+        group: list[int] = []
+        pending = 0
+        for seq_index, tail in enumerate(tails):
+            if pending + len(tail) > n_batch:
+                self._decode_tail_group(tails, group, prefix_len, collected)
+                group = []
+                pending = 0
+            group.append(seq_index)
+            pending += len(tail)
+        if group:
+            self._decode_tail_group(tails, group, prefix_len, collected)
+
+    def _decode_tail_group(
+        self,
+        tails: Sequence[Sequence[int]],
+        group: Sequence[int],
+        prefix_len: int,
+        collected: list[np.ndarray | None],
+    ) -> None:
+        """把若干条尾巴拼成一批喂下去, 读各自末位 logits.
+
+        输入: tails -- 逐条尾巴 (下标与序列一致); group -- 本批要喂的序列下标;
+              prefix_len -- 尾巴的起始位置; collected -- 输出槽位;
+        输出: 无; 预期: 单条尾巴就超过 n_batch 时报错, 不截断。
+        """
+        rows: list[tuple[list[int], int, int]] = []
+        logits_at: set[int] = set()
+        for seq_index in group:
+            tail = tails[seq_index]
+            if len(tail) > self._config.n_batch:
+                raise EngineError(
+                    f"sequence {seq_index} tail of {len(tail)} tokens exceeds "
+                    f"n_batch={self._config.n_batch}"
+                )
+            for offset, token in enumerate(tail):
+                rows.append(([seq_index], token, prefix_len + offset))
+            logits_at.add(len(rows) - 1)
+        self._fill_rows(rows, logits_at)
+        self._context.decode(self._batch)
+        cursor = 0
+        for seq_index in group:
+            tail = tails[seq_index]
+            collected[seq_index] = _read_logits(
+                self._context, cursor + len(tail) - 1, self.n_vocab
+            )
+            cursor += len(tail)
+
     def _eval_chunked_sequence(self, tokens: Sequence[int]) -> np.ndarray:
         """一条装不进 n_batch 的长序列: 用 set_batch 分块喂完, 取末位 logits.
 
@@ -324,20 +464,37 @@ class BatchEngine:
         pos 从 0 起算、只能整条一次塞进去。这里只填 token/pos/seq_id/logits
         四个数组, 其余字段不动。
         """
-        if len(entries) > self._config.n_batch:
+        rows = [((seq_id,), token, position) for seq_id, token, position in entries]
+        if logits_all:
+            logits_at = set(range(len(rows)))
+        else:
+            logits_at = {len(rows) - 1} if rows else set()
+        self._fill_rows(rows, logits_at)
+
+    def _fill_rows(
+        self, rows: Sequence[tuple[Sequence[int], int, int]], logits_at: set[int]
+    ) -> None:
+        """手填批槽位, 一行 token 可挂多个 seq_id.
+
+        输入: rows -- [(seq_ids, token, pos)], 一行可属于多条序列 (共享前缀);
+              logits_at -- 需要打开 logits 的行号集合 (下标按 rows);
+        输出: 无;
+        预期: 行数超过 n_batch 时报错, 不截断; 只写 token/pos/seq_id/logits
+              四组数组, 其余字段不动。
+        """
+        if len(rows) > self._config.n_batch:
             raise EngineError(
-                f"batch of {len(entries)} tokens exceeds n_batch={self._config.n_batch}"
+                f"batch of {len(rows)} tokens exceeds n_batch={self._config.n_batch}"
             )
         batch = self._batch.batch
-        for index, (seq_id, token, pos) in enumerate(entries):
+        for index, (seq_ids, token, position) in enumerate(rows):
             batch.token[index] = token
-            batch.pos[index] = pos
-            batch.seq_id[index][0] = seq_id
-            batch.n_seq_id[index] = 1
-            batch.logits[index] = 1 if logits_all else 0
-        if entries and not logits_all:
-            batch.logits[len(entries) - 1] = 1
-        batch.n_tokens = len(entries)
+            batch.pos[index] = position
+            for slot, seq_id in enumerate(seq_ids):
+                batch.seq_id[index][slot] = seq_id
+            batch.n_seq_id[index] = len(seq_ids)
+            batch.logits[index] = 1 if index in logits_at else 0
+        batch.n_tokens = len(rows)
 
     def reasoned_logits(
         self,

@@ -25,13 +25,16 @@ class SystemOneRequest(BaseModel):
 
     ``think_tokens`` 是本地扩展字段 (官方契约没有): 大于 0 时先让模型自由推理这么多
     token, 再把闭合标记接回决策位。缺省 0 表示纯 prefill 决策, 与官方语义一致。
+    这里不设固定上限 —— 真正的约束是上下文窗口, 由引擎按
+    prompt + think + closure 是否超过 n_ctx 校验, 超了直接报错不截断;
+    正常模型想完会自己吐 EOS, 只有死循环才会一直走到窗口边界。
     闭合标记本身不对外暴露, 由题型在内部派生。
     """
 
     state: Any
     model: str = Field(min_length=1)
     questions: dict[str, dict[str, Any]] = Field(min_length=1)
-    think_tokens: int = Field(default=0, ge=0, le=1024)
+    think_tokens: int = Field(default=0, ge=0)
 
     @field_validator("state")
     @classmethod
