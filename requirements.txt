@@ -1,0 +1,10 @@
+# 运行时依赖 (Python 3.11)
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
+numpy==2.4.6
+llama-cpp-python==0.3.35
+
+# 测试与示例
+pytest==9.1.1
+httpx==0.28.1
