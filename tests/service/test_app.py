@@ -118,6 +118,26 @@ def test_bad_state_shape_is_422(plain_client: TestClient) -> None:
     assert isinstance(response.json()["detail"], list)
 
 
+def test_state_must_be_present_but_may_be_empty(decision_client: TestClient) -> None:
+    """官方真机: state 键必须给 (缺失或 null 都 422), 空字符串放行.
+
+    网页版「不填 state」实际发的是 ""; 直接不给键或给 null 会被官方拒掉,
+    本地 dump 见 tests/fixtures/official/probe_state_*.json。
+    """
+    base = {
+        "model": MODEL_NAME,
+        "questions": {"q": {"type": "noul", "instructions": "Is this fine?"}},
+    }
+    for payload in (base, {**base, "state": None}):
+        response = decision_client.post("/v1/systemone", json=payload)
+        assert response.status_code == 422
+        assert any(entry["loc"][-1] == "state" for entry in response.json()["detail"])
+
+    response = decision_client.post("/v1/systemone", json={**base, "state": ""})
+    assert response.status_code == 200
+    assert 0.0 <= response.json()["answers"]["q"]["noul"] <= 1.0
+
+
 def test_empty_questions_is_422(plain_client: TestClient) -> None:
     """questions 不能为空."""
     response = plain_client.post(

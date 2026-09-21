@@ -129,7 +129,7 @@ def test_prompt_omits_empty_sections() -> None:
     """null 字段渲染成空串时整段省略: 不留空标题, 也不留尾随空格."""
     chunk = plan_chunks(2, 128).chunks[0]
     prompt = _choice_prompt(
-        Choice(instructions=None, criteria={"a": None, "b": None}), chunk
+        Choice(instructions=None, criteria={"a": None, "b": ""}), chunk
     )
     assert "Question:" not in prompt
     assert "[0] a" in prompt

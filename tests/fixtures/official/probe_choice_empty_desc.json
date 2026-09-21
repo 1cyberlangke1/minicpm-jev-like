@@ -1,0 +1,39 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "x",
+    "model": "jev-latest",
+    "questions": {
+      "q": {
+        "type": "choice",
+        "instructions": "Which option fits?",
+        "criteria": {
+          "alpha": null,
+          "beta": ""
+        }
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "q": {
+        "type": "choice",
+        "choice": "alpha",
+        "confidence": 0.82,
+        "probabilities": {
+          "alpha": 0.91,
+          "beta": 0.09
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 287,
+      "output_tokens": 31
+    }
+  },
+  "notes": {
+    "probe": "choice 选项描述给 null 与空字符串"
+  }
+}

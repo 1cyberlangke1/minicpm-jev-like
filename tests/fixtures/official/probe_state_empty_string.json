@@ -1,0 +1,30 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "",
+    "model": "jev-latest",
+    "questions": {
+      "q": {
+        "type": "noul",
+        "instructions": "Is this fine?"
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "q": {
+        "type": "noul",
+        "noul": 0.58
+      }
+    },
+    "usage": {
+      "input_tokens": 270,
+      "output_tokens": 20
+    }
+  },
+  "notes": {
+    "probe": "state 给空字符串 (官方网页版就是这么发的)"
+  }
+}

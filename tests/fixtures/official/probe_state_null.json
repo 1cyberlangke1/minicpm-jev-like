@@ -1,0 +1,40 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": null,
+    "model": "jev-latest",
+    "questions": {
+      "q": {
+        "type": "noul",
+        "instructions": "Is this fine?"
+      }
+    }
+  },
+  "status": 422,
+  "body": {
+    "detail": [
+      {
+        "type": "missing",
+        "loc": [
+          "body",
+          "state"
+        ],
+        "msg": "Field required",
+        "input": {
+          "state": null,
+          "model": "jev-latest",
+          "questions": {
+            "q": {
+              "type": "noul",
+              "instructions": "Is this fine?",
+              "criteria": null
+            }
+          }
+        }
+      }
+    ]
+  },
+  "notes": {
+    "probe": "state 显式给 null"
+  }
+}
