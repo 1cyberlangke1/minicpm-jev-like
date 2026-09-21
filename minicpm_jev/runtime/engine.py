@@ -314,17 +314,92 @@ class BatchEngine:
             start += len(chunk)
         return _read_logits(self._context, self._batch.n_tokens() - 1, self.n_vocab)
 
+    def _reason_one(
+        self, tokens: Sequence[int], think_tokens: int, closure: str
+    ) -> np.ndarray:
+        """单条: prefill -> 贪心自由续写 -> 强制接闭合标记 -> 读决策位 logits.
+
+        输入: tokens -- 已渲染的 prompt (结尾是 assistant 头, 不带预填前缀);
+              think_tokens -- 允许自由推理的 token 数 (0 表示直接闭合);
+              closure -- 闭合标记文本 (例如 "</think>\n[");
+        输出: 决策位的全 vocab logits;
+        预期: 超出 n_ctx 直接报错不截断; 撞到 EOS 提前收手.
+        """
+        if not tokens:
+            raise EngineError("sequence is empty; nothing to prefill")
+        closure_tokens = self.tokenize(closure, add_bos=False, special=False)
+        if len(tokens) + think_tokens + len(closure_tokens) > self._config.n_ctx:
+            raise EngineError(
+                f"prompt {len(tokens)} + think {think_tokens} + closure "
+                f"{len(closure_tokens)} exceeds n_ctx={self._config.n_ctx}"
+            )
+        _clear_kv(self._context.memory)
+        n_batch = self._config.n_batch
+        n_past = 0
+        for start in range(0, len(tokens), n_batch):
+            chunk = list(tokens[start : start + n_batch])
+            self._batch.reset()
+            self._batch.set_batch(chunk, n_past, False)
+            self._context.decode(self._batch)
+            n_past += len(chunk)
+        eos = self._model.token_eos()
+        for _ in range(think_tokens):
+            logits = _read_logits(
+                self._context, self._batch.n_tokens() - 1, self.n_vocab
+            )
+            next_token = int(np.argmax(logits))
+            if next_token == eos:
+                break
+            self._batch.reset()
+            self._batch.set_batch([next_token], n_past, False)
+            self._context.decode(self._batch)
+            n_past += 1
+        self._batch.reset()
+        self._batch.set_batch(closure_tokens, n_past, False)
+        self._context.decode(self._batch)
+        return _read_logits(self._context, self._batch.n_tokens() - 1, self.n_vocab)
+
+    def reasoned_logits(
+        self,
+        sequences: Sequence[Sequence[int]],
+        *,
+        think_tokens: int,
+        closure: str = "</think>\n[",
+    ) -> list[np.ndarray]:
+        """带推理预算的决策位 logits.
+
+        输入: sequences -- prompt 序列 (assistant 头收尾, 不带预填前缀);
+              think_tokens -- 每条允许自由推理的 token 数;
+              closure -- 推理结束后强制接上的闭合标记;
+        输出: 与输入等长的决策位 logits;
+        预期: 自由生成天然串行, 这里逐条跑, 不与其他序列合批.
+        """
+        return [
+            self._reason_one(tokens, think_tokens, closure) for tokens in sequences
+        ]
+
     def score(
         self,
         sequences: Sequence[Sequence[int]],
         labels: LabelSet | Sequence[LabelSet],
+        *,
+        think_tokens: int = 0,
+        closure: str = "</think>\n[",
     ) -> list[dict[str, float]]:
         """批量打分: 决策位 logits -> 每个标签组的受限概率.
 
-        输入: sequences -- token id 序列; labels -- 一个标签集 (全批共用) 或逐条标签集
+        输入: sequences -- token id 序列; labels -- 一个标签集 (全批共用) 或逐条标签集;
+              think_tokens -- 大于 0 时先让模型自由推理这么多 token 再闭合读决策位;
+              closure -- 闭合标记文本, 必须与本题型的正常预填前缀一致
+                        (noul 用 "\n", choice/score 用 "\n[")
         输出: 逐条的 {组名: 概率}
         """
-        logits = self.decision_logits(sequences)
+        if think_tokens > 0:
+            logits = self.reasoned_logits(
+                sequences, think_tokens=think_tokens, closure=closure
+            )
+        else:
+            logits = self.decision_logits(sequences)
         label_sets = _normalize_labels(labels, len(sequences))
         return [
             label_set.probabilities(vector) for label_set, vector in zip(label_sets, logits)
