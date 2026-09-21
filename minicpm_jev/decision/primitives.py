@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..template.entry import EntryTypeError, is_entry
+from ..template.entry import is_entry
 
 __all__ = [
     "MAX_SCORE_LEVELS",

@@ -3,7 +3,6 @@
 import pytest
 
 from minicpm_jev.chunking import (
-    DEFAULT_CHUNK_SIZE,
     MAX_CHUNK_SIZE,
     Chunk,
     plan_chunks,

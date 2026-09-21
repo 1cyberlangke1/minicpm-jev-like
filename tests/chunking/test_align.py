@@ -6,7 +6,6 @@ from minicpm_jev.chunking import (
     ChunkAlignError,
     align_chunks,
     chunk_log_odds,
-    global_softmax,
 )
 from minicpm_jev.labels import NONE_LABEL
 

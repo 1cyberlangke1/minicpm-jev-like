@@ -4,14 +4,10 @@ import pytest
 
 from minicpm_jev.decision import (
     MAX_SCORE_LEVELS,
-    MIN_SCORE_LEVELS,
     Choice,
-    ChoiceAnswer,
     Noul,
-    NoulAnswer,
     QuestionError,
     Score,
-    ScoreAnswer,
     parse_question,
 )
 

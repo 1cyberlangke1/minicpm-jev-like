@@ -8,7 +8,6 @@ from minicpm_jev.decision import (
     Noul,
     NoulAnswer,
     Score,
-    ScoreAnswer,
     Usage,
     answer,
     answer_all,
