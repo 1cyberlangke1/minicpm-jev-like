@@ -266,7 +266,7 @@ def draw(
         recent = trail[-HISTORY:]
         moves = ("... " if len(trail) > len(recent) else "") + " ".join(recent)
     else:
-        moves = "(起点)"
+        moves = "(start)"
     paint(
         f"model: {model}\n\n"
         f"{render_map(board, row, column, color=True)}\n\n"
@@ -309,14 +309,14 @@ def walk(engine: BatchEngine, grid, start, goal, limit: int, model: str = ""):
         next_column = column + delta_column
         note = f"step {steps}: {picked} ({elapsed:.0f}ms)"
         if board[next_row][next_column] == WALL:
-            show(answer.probabilities, note + " 撞墙, 结束")
+            show(answer.probabilities, note + " hit a wall, stop")
             return False, steps
         board[row][column] = "*"
         row, column = next_row, next_column
         history.append(f"{picked} -> ({row},{column})")
         trail.append(picked)
         if (row, column) == goal:
-            show(answer.probabilities, note + " 到达终点")
+            show(answer.probabilities, note + " reached the goal")
             return True, steps
         show(answer.probabilities, note)
     return False, steps
