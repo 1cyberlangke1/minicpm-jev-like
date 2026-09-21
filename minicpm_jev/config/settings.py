@@ -62,7 +62,7 @@ class Settings:
     device: Device = Device.GPU
     n_ctx: int = DEFAULT_N_CTX
     chunk_size: int = DEFAULT_CHUNK_SIZE
-    n_seq_max: int = 32
+    n_seq_max: int = 16
     n_batch: int = 2048
     n_ubatch: int = 512
     n_threads: int | None = None

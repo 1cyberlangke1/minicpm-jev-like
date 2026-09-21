@@ -14,6 +14,7 @@ def test_defaults_match_documented_values() -> None:
     assert settings.device is Device.GPU
     assert settings.n_ctx == DEFAULT_N_CTX == 32768
     assert settings.chunk_size == DEFAULT_CHUNK_SIZE == 128
+    assert settings.n_seq_max == 16
     assert settings.queue_max == 30
     assert settings.host == "127.0.0.1"
     assert settings.port == 8000
