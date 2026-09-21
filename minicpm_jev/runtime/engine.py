@@ -314,69 +314,128 @@ class BatchEngine:
             start += len(chunk)
         return _read_logits(self._context, self._batch.n_tokens() - 1, self.n_vocab)
 
-    def _reason_one(
-        self, tokens: Sequence[int], think_tokens: int, closure: str
-    ) -> np.ndarray:
-        """单条: prefill -> 贪心自由续写 -> 强制接闭合标记 -> 读决策位 logits.
+    def _fill(
+        self, entries: Sequence[tuple[int, int, int]], logits_all: bool
+    ) -> None:
+        """手填批槽位. 输入: [(seq_id, token, pos)]; logits_all -- 是否每个槽位都要 logits.
 
-        输入: tokens -- 已渲染的 prompt (结尾是 assistant 头, 不带预填前缀);
-              think_tokens -- 允许自由推理的 token 数 (0 表示直接闭合);
-              closure -- 闭合标记文本 (例如 "</think>\n[");
-        输出: 决策位的全 vocab logits;
-        预期: 超出 n_ctx 直接报错不截断; 撞到 EOS 提前收手.
+        直接写原生字段, 因为库自带的两个助手都撑不起「多序列各自续接」:
+        set_batch 把 seq_id 写死成 0 并且覆盖式重置 n_tokens, add_sequence 的
+        pos 从 0 起算、只能整条一次塞进去。这里只填 token/pos/seq_id/logits
+        四个数组, 其余字段不动。
         """
-        if not tokens:
-            raise EngineError("sequence is empty; nothing to prefill")
-        closure_tokens = self.tokenize(closure, add_bos=False, special=False)
-        if len(tokens) + think_tokens + len(closure_tokens) > self._config.n_ctx:
+        if len(entries) > self._config.n_batch:
             raise EngineError(
-                f"prompt {len(tokens)} + think {think_tokens} + closure "
-                f"{len(closure_tokens)} exceeds n_ctx={self._config.n_ctx}"
+                f"batch of {len(entries)} tokens exceeds n_batch={self._config.n_batch}"
             )
-        _clear_kv(self._context.memory)
-        n_batch = self._config.n_batch
-        n_past = 0
-        for start in range(0, len(tokens), n_batch):
-            chunk = list(tokens[start : start + n_batch])
-            self._batch.reset()
-            self._batch.set_batch(chunk, n_past, False)
-            self._context.decode(self._batch)
-            n_past += len(chunk)
-        eos = self._model.token_eos()
-        for _ in range(think_tokens):
-            logits = _read_logits(
-                self._context, self._batch.n_tokens() - 1, self.n_vocab
-            )
-            next_token = int(np.argmax(logits))
-            if next_token == eos:
-                break
-            self._batch.reset()
-            self._batch.set_batch([next_token], n_past, False)
-            self._context.decode(self._batch)
-            n_past += 1
-        self._batch.reset()
-        self._batch.set_batch(closure_tokens, n_past, False)
-        self._context.decode(self._batch)
-        return _read_logits(self._context, self._batch.n_tokens() - 1, self.n_vocab)
+        batch = self._batch.batch
+        for index, (seq_id, token, pos) in enumerate(entries):
+            batch.token[index] = token
+            batch.pos[index] = pos
+            batch.seq_id[index][0] = seq_id
+            batch.n_seq_id[index] = 1
+            batch.logits[index] = 1 if logits_all else 0
+        if entries and not logits_all:
+            batch.logits[len(entries) - 1] = 1
+        batch.n_tokens = len(entries)
 
     def reasoned_logits(
         self,
         sequences: Sequence[Sequence[int]],
         *,
         think_tokens: int,
-        closure: str = "</think>\n[",
+        closure: str = "\n[",
     ) -> list[np.ndarray]:
-        """带推理预算的决策位 logits.
+        """带推理预算的决策位 logits (锁步批量).
 
         输入: sequences -- prompt 序列 (assistant 头收尾, 不带预填前缀);
               think_tokens -- 每条允许自由推理的 token 数;
               closure -- 推理结束后强制接上的闭合标记;
         输出: 与输入等长的决策位 logits;
-        预期: 自由生成天然串行, 这里逐条跑, 不与其他序列合批.
+        预期: think_tokens <= 0 时等价于把闭合标记直接拼进 prompt 再读决策位;
+              大于 0 时每条序列各占一个 seq_id, 每步一次 decode 全体前进一步,
+              谁吐 EOS 谁退出活跃集; 全停之后各自喂闭合标记读决策位。
+              超 n_ctx 或超 n_seq_max 直接报错, 不截断也不静默丢。
         """
-        return [
-            self._reason_one(tokens, think_tokens, closure) for tokens in sequences
-        ]
+        if not sequences:
+            return []
+        closure_tokens = self.tokenize(closure, add_bos=False, special=False)
+        if think_tokens <= 0:
+            return self.decision_logits(
+                [list(tokens) + closure_tokens for tokens in sequences]
+            )
+        if len(sequences) > self._config.n_seq_max:
+            raise EngineError(
+                f"{len(sequences)} sequences exceed n_seq_max={self._config.n_seq_max}"
+            )
+        for index, tokens in enumerate(sequences):
+            if not tokens:
+                raise EngineError(f"sequence {index} is empty; nothing to prefill")
+            total = len(tokens) + think_tokens + len(closure_tokens)
+            if total > self._config.n_ctx:
+                raise EngineError(
+                    f"sequence {index}: prompt {len(tokens)} + think {think_tokens}"
+                    f" + closure {len(closure_tokens)} exceeds n_ctx={self._config.n_ctx}"
+                )
+
+        _clear_kv(self._context.memory)
+        n_batch = self._config.n_batch
+        eos = self._model.token_eos()
+        n_past = [0] * len(sequences)
+        pending: dict[int, int] = {}
+
+        # 1) 各序列按自己的 seq_id 分块喂完 prompt; 最后一块打开 logits, 顺手取首步
+        for seq_index, tokens in enumerate(sequences):
+            for start in range(0, len(tokens), n_batch):
+                chunk = list(tokens[start : start + n_batch])
+                is_last = start + len(chunk) == len(tokens)
+                self._fill(
+                    [
+                        (seq_index, token, start + offset)
+                        for offset, token in enumerate(chunk)
+                    ],
+                    logits_all=is_last,
+                )
+                self._context.decode(self._batch)
+                n_past[seq_index] = start + len(chunk)
+                if is_last:
+                    logits = _read_logits(
+                        self._context, len(chunk) - 1, self.n_vocab
+                    )
+                    pending[seq_index] = int(np.argmax(logits))
+
+        # 2) 锁步生成: 每步一次 decode, 每条还活着的序列各前进一个 token
+        for _ in range(think_tokens):
+            active = [index for index, token in pending.items() if token != eos]
+            if not active:
+                break
+            self._fill(
+                [(index, pending[index], n_past[index]) for index in active],
+                logits_all=True,
+            )
+            self._context.decode(self._batch)
+            following: dict[int, int] = {}
+            for slot, index in enumerate(active):
+                n_past[index] += 1
+                logits = _read_logits(self._context, slot, self.n_vocab)
+                following[index] = int(np.argmax(logits))
+            pending = following
+
+        # 3) 各自喂闭合标记并读决策位 (闭合标记很短, 逐条喂最省心)
+        results: list[np.ndarray] = []
+        for seq_index in range(len(sequences)):
+            self._fill(
+                [
+                    (seq_index, token, n_past[seq_index] + offset)
+                    for offset, token in enumerate(closure_tokens)
+                ],
+                logits_all=False,
+            )
+            self._context.decode(self._batch)
+            results.append(
+                _read_logits(self._context, len(closure_tokens) - 1, self.n_vocab)
+            )
+        return results
 
     def score(
         self,
