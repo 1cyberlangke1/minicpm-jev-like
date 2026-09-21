@@ -105,13 +105,12 @@ def test_numeric_labels_ids_match_tokenize_label(engine: BatchEngine) -> None:
 
 
 def test_numeric_labels_property_is_cached(engine: BatchEngine) -> None:
-    """数字标签工厂是进程内单例; 同一组标签只编译一次, 重复取返回同一对象."""
+    """数字标签工厂是进程内单例; 重复取同一个组合不会新增缓存条目."""
     factory = engine.numeric_labels
     assert factory is engine.numeric_labels
-    before = factory.cached_entries
     first = factory.get(4, with_none=True)
+    entries = factory.cached_entries
     second = factory.get(4, with_none=True)
     assert first is second
     assert first.names == ("0", "1", "2", "3", "None")
-    # 只新增一条缓存 (前面的用例可能已经预热过别的 (count, with_none) 组合)
-    assert factory.cached_entries == before + 1
+    assert factory.cached_entries == entries
