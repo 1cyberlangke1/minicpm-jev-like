@@ -9,9 +9,12 @@
 from .engine import BatchEngine, Device, EngineConfig, EngineError
 from .labels import (
     BOOL_LABEL_SPECS,
+    NONE_LABEL,
     LabelResolutionError,
     LabelSet,
     LabelSpec,
+    NumericLabels,
+    label_texts,
     resolve_labels,
 )
 from .template import (
@@ -34,8 +37,11 @@ __all__ = [
     "LabelResolutionError",
     "LabelSet",
     "LabelSpec",
+    "NONE_LABEL",
+    "NumericLabels",
     "get_chat_template",
     "is_entry",
+    "label_texts",
     "render_chat",
     "render_entry",
     "resolve_labels",
