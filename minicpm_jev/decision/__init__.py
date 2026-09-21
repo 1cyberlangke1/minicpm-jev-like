@@ -20,7 +20,7 @@ from .primitives import (
     ScoreAnswer,
     parse_question,
 )
-from .scoring import answer, answer_choice, answer_noul, answer_score
+from .scoring import Usage, answer, answer_choice, answer_noul, answer_score
 
 __all__ = [
     "MAX_SCORE_LEVELS",
@@ -34,6 +34,7 @@ __all__ = [
     "QuestionError",
     "Score",
     "ScoreAnswer",
+    "Usage",
     "answer",
     "answer_choice",
     "answer_noul",

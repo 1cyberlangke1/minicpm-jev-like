@@ -17,6 +17,8 @@ prompt 结构 (铁律, 不许手搓标记):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from ..chunking import DEFAULT_CHUNK_SIZE, Chunk, align_chunks, plan_chunks
@@ -35,7 +37,7 @@ from .primitives import (
     ScoreAnswer,
 )
 
-__all__ = ["answer", "answer_choice", "answer_noul", "answer_score"]
+__all__ = ["Usage", "answer", "answer_choice", "answer_noul", "answer_score"]
 
 #: 思考段截断: 让模型跳过内部推理, 直接在决策位吐标签
 THINK_PREFIX = "</think>\n"
@@ -43,6 +45,33 @@ THINK_PREFIX = "</think>\n"
 INDEX_PREFIX = THINK_PREFIX + "["
 #: 分块时锚点选项的说明 (与白皮书措辞一致)
 NONE_HINT = "[None] 以上所有选项均不合适、错误或存在严重缺陷"
+
+
+@dataclass
+class Usage:
+    """一次决策的 token 统计.
+
+    ``input_tokens`` 按官方语义统计「本次全部序列的 token 数 (去重前)」;
+    ``output_tokens`` 恒为 1 —— prefill-only 确实在决策位读了一个 token 的分布,
+    只是不把它的文本吐出来。
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 1
+
+    def add_input(self, tokens: int) -> None:
+        """累加输入 token 数. 输入: tokens -- 本次新增的 token 数; 输出: 无."""
+        self.input_tokens += tokens
+
+    def to_dict(self) -> dict[str, int]:
+        """官方 usage 形状."""
+        return {"input_tokens": self.input_tokens, "output_tokens": self.output_tokens}
+
+
+def _record_usage(usage: Usage | None, sequences: Sequence[Sequence[int]]) -> None:
+    """把本批序列的 token 数记进 usage (没给 usage 就什么都不做)."""
+    if usage is not None:
+        usage.add_input(sum(len(sequence) for sequence in sequences))
 
 
 def _system_message(state: Any) -> dict[str, str]:
@@ -86,7 +115,13 @@ def _score_user(question: Score) -> str:
     return "\n".join(lines)
 
 
-def answer_noul(engine: BatchEngine, state: Any, question: Noul) -> NoulAnswer:
+def answer_noul(
+    engine: BatchEngine,
+    state: Any,
+    question: Noul,
+    *,
+    usage: Usage | None = None,
+) -> NoulAnswer:
     """noul 决策.
 
     输入: engine -- 批量引擎; state -- 请求级背景; question -- Noul;
@@ -98,6 +133,7 @@ def answer_noul(engine: BatchEngine, state: Any, question: Noul) -> NoulAnswer:
         [_system_message(state), {"role": "user", "content": _noul_user(question)}],
         assistant_prefix=THINK_PREFIX,
     )
+    _record_usage(usage, [tokens])
     probabilities = engine.score([tokens], labels)[0]
     return NoulAnswer(noul=probabilities["true"])
 
@@ -108,6 +144,7 @@ def answer_choice(
     question: Choice,
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    usage: Usage | None = None,
 ) -> ChoiceAnswer:
     """choice 决策 (候选数不受限).
 
@@ -131,6 +168,7 @@ def answer_choice(
                 assistant_prefix=INDEX_PREFIX,
             )
         )
+    _record_usage(usage, sequences)
     aligned = align_chunks(engine.score(sequences, label_sets))
     names = list(question.criteria)
     probabilities = {name: value for name, value in zip(names, aligned)}
@@ -142,7 +180,13 @@ def answer_choice(
     )
 
 
-def answer_score(engine: BatchEngine, state: Any, question: Score) -> ScoreAnswer:
+def answer_score(
+    engine: BatchEngine,
+    state: Any,
+    question: Score,
+    *,
+    usage: Usage | None = None,
+) -> ScoreAnswer:
     """score 决策: 档位上的概率加权值.
 
     输入: engine; state; question -- Score (2~10 档);
@@ -155,6 +199,7 @@ def answer_score(engine: BatchEngine, state: Any, question: Score) -> ScoreAnswe
         [_system_message(state), {"role": "user", "content": _score_user(question)}],
         assistant_prefix=INDEX_PREFIX,
     )
+    _record_usage(usage, [tokens])
     probabilities = engine.score([tokens], labels)[0]
     ordered = [probabilities[str(index)] for index in range(level_count)]
     score = sum(index * probability for index, probability in enumerate(ordered))
@@ -177,6 +222,7 @@ def answer(
     question: Question,
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    usage: Usage | None = None,
 ) -> Answer:
     """按题型分发.
 
@@ -185,9 +231,9 @@ def answer(
     预期: 未知类型直接抛 TypeError (调用方应先 parse_question 校验过).
     """
     if isinstance(question, Noul):
-        return answer_noul(engine, state, question)
+        return answer_noul(engine, state, question, usage=usage)
     if isinstance(question, Choice):
-        return answer_choice(engine, state, question, chunk_size=chunk_size)
+        return answer_choice(engine, state, question, chunk_size=chunk_size, usage=usage)
     if isinstance(question, Score):
-        return answer_score(engine, state, question)
+        return answer_score(engine, state, question, usage=usage)
     raise TypeError(f"unsupported question type: {type(question).__name__}")
