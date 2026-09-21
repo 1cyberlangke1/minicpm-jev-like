@@ -83,3 +83,35 @@ def test_chunked_decode_matches_large_batch(engine, labels) -> None:
             assert abs(value - single_scores[name]) <= PROB_TOL, (
                 f"第 {index} 条序列分块后 {name} 概率 {value} 与单发 {single_scores[name]} 差超限"
             )
+
+
+def test_tokenize_label_uses_label_contract(engine: BatchEngine) -> None:
+    """标签口径 = 不带 BOS、不解析特殊标记; 标签必须落在单个 token 上."""
+    assert engine.tokenize_label("12") == engine.tokenize(
+        "12", add_bos=False, special=False
+    )
+    assert engine.tokenize_label("None") == engine.tokenize(
+        "None", add_bos=False, special=False
+    )
+    for text in ("0", "9", "12", "127", "None"):
+        assert len(engine.tokenize_label(text)) == 1, text
+
+
+def test_numeric_labels_ids_match_tokenize_label(engine: BatchEngine) -> None:
+    """标签编译用的 token id 必须与 tokenize_label 完全一致, 否则打分位会错位."""
+    label_set = engine.numeric_labels.get(3, with_none=True)
+    expected = tuple((engine.tokenize_label(name)[0],) for name in label_set.names)
+    assert label_set.token_ids == expected
+
+
+def test_numeric_labels_property_is_cached(engine: BatchEngine) -> None:
+    """数字标签工厂是进程内单例; 同一组标签只编译一次, 重复取返回同一对象."""
+    factory = engine.numeric_labels
+    assert factory is engine.numeric_labels
+    before = factory.cached_entries
+    first = factory.get(4, with_none=True)
+    second = factory.get(4, with_none=True)
+    assert first is second
+    assert first.names == ("0", "1", "2", "3", "None")
+    # 只新增一条缓存 (前面的用例可能已经预热过别的 (count, with_none) 组合)
+    assert factory.cached_entries == before + 1

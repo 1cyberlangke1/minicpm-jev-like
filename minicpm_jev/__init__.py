@@ -18,7 +18,17 @@ from .chunking import (
     global_softmax,
     plan_chunks,
 )
-from .engine import BatchEngine, Device, EngineConfig, EngineError
+from .runtime import (
+    DEFAULT_N_CTX,
+    MAX_N_CTX,
+    BatchEngine,
+    Device,
+    EngineConfig,
+    EngineError,
+    acquire_device,
+    reset_device_lock,
+    validate_n_ctx,
+)
 from .labels import (
     BOOL_LABEL_SPECS,
     NONE_LABEL,
@@ -46,6 +56,7 @@ __all__ = [
     "ChunkAlignError",
     "ChunkPlan",
     "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_N_CTX",
     "Device",
     "EngineConfig",
     "EngineError",
@@ -54,8 +65,10 @@ __all__ = [
     "LabelSet",
     "LabelSpec",
     "MAX_CHUNK_SIZE",
+    "MAX_N_CTX",
     "NONE_LABEL",
     "NumericLabels",
+    "acquire_device",
     "align_chunks",
     "chunk_log_odds",
     "get_chat_template",
@@ -66,4 +79,6 @@ __all__ = [
     "render_chat",
     "render_entry",
     "resolve_labels",
+    "reset_device_lock",
+    "validate_n_ctx",
 ]

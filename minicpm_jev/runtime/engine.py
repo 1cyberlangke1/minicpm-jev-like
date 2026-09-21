@@ -11,9 +11,8 @@
 - prefill-only: 不 decode 任何 token, 只在每条序列最后一个 token 上打开 logits.
 - KV 重置必须用 llama_memory_clear: kv_unified 下 llama_memory_seq_rm(mem,-1,-1,-1)
   清不干净, 实测第二次 decode 直接报「序列位置不连续」.
-- 设备契约: gpu = n_gpu_layers=-1; cpu 纯档 = n_gpu_layers=0 且进程级
-  CUDA_VISIBLE_DEVICES=-1 (空串会被 Windows 环境机制整个丢弃, 必须写 -1).
-  同一进程只允许一种设备档位, 混用直接报错, 不静默降级.
+- 设备档位与 n_ctx 边界见 runtime.device: gpu = n_gpu_layers=-1; cpu 纯档 =
+  n_gpu_layers=0 且进程级 CUDA_VISIBLE_DEVICES=-1; 同一进程只允许一种档位.
 """
 
 from __future__ import annotations
@@ -21,54 +20,19 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
 import llama_cpp
 import numpy as np
 from llama_cpp import _internals as _internals
 
-from .labels import LabelSet
-from .template import get_chat_template, render_chat
+from ..labels import LabelSet, NumericLabels
+from ..template import get_chat_template, render_chat
+from .device import DEFAULT_N_CTX, Device, EngineError, acquire_device, validate_n_ctx
 
-__all__ = ["BatchEngine", "Device", "EngineConfig", "EngineError"]
+__all__ = ["BatchEngine", "EngineConfig"]
 
 Message = Mapping[str, str]
-
-
-class EngineError(RuntimeError):
-    """引擎契约被违反: 批次超限 / 设备冲突 / 标签数量不匹配 / 取不到 logits."""
-
-
-class Device(str, Enum):
-    """推理设备档位."""
-
-    GPU = "gpu"
-    CPU = "cpu"
-
-
-_ACTIVE_DEVICE: Device | None = None
-
-
-def _acquire_device(device: Device) -> None:
-    """锁定进程级设备档位, 一个进程只允许一种.
-
-    输入: device -- 目标设备
-    输出: 无
-    预期: CPU 档在加载模型前先把 CUDA_VISIBLE_DEVICES 置 -1; 已锁定别的档位时抛
-          EngineError. 之所以要进程级屏蔽: GPU 可见时本构建即使 0 层 offload 仍会把
-          部分计算调度到 CUDA0, 跨调用不再可复现.
-    """
-    global _ACTIVE_DEVICE
-    if _ACTIVE_DEVICE is None:
-        if device is Device.CPU:
-            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-        _ACTIVE_DEVICE = device
-        return
-    if _ACTIVE_DEVICE is not device:
-        raise EngineError(
-            f"本进程已锁定 {_ACTIVE_DEVICE.value} 设备, 不能再创建 {device.value} 引擎"
-        )
 
 
 @dataclass(frozen=True)
@@ -81,7 +45,7 @@ class EngineConfig:
 
     model_path: Path
     device: Device = Device.GPU
-    n_ctx: int = 4096
+    n_ctx: int = DEFAULT_N_CTX
     n_batch: int = 2048
     n_ubatch: int = 512
     n_seq_max: int = 32
@@ -89,7 +53,8 @@ class EngineConfig:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "model_path", Path(self.model_path))
-        for field_name in ("n_ctx", "n_batch", "n_ubatch", "n_seq_max"):
+        validate_n_ctx(self.n_ctx)
+        for field_name in ("n_batch", "n_ubatch", "n_seq_max"):
             value = getattr(self, field_name)
             if value <= 0:
                 raise ValueError(f"{field_name} 必须为正, 收到 {value}")
@@ -117,7 +82,7 @@ def _read_logits(context: object, index: int, n_vocab: int) -> np.ndarray:
     """
     pointer = context.get_logits_ith(index)  # type: ignore[attr-defined]
     if not pointer:
-        raise EngineError(f"批内第 {index} 个 token 没打开 logits, 取不到分布")
+        raise EngineError(f"logits are not enabled for batch token {index}")
     return np.ctypeslib.as_array(pointer, shape=(n_vocab,)).astype(np.float32, copy=True)
 
 
@@ -127,7 +92,7 @@ def _normalize_labels(labels: LabelSet | Sequence[LabelSet], count: int) -> list
         return [labels] * count
     resolved = list(labels)
     if len(resolved) != count:
-        raise EngineError(f"标签集数量 {len(resolved)} 与序列数 {count} 不一致")
+        raise EngineError(f"got {len(resolved)} label sets for {count} sequences")
     return resolved
 
 
@@ -135,7 +100,7 @@ class BatchEngine:
     """一次 decode 处理整批序列的受限决策打分引擎."""
 
     def __init__(self, config: EngineConfig) -> None:
-        _acquire_device(config.device)
+        acquire_device(config.device)
         self._config = config
 
         model_params = llama_cpp.llama_model_default_params()
@@ -165,6 +130,7 @@ class BatchEngine:
             n_tokens=config.n_batch, embd=0, n_seq_max=config.n_seq_max, verbose=False
         )
         self._closed = False
+        self._numeric_labels: NumericLabels | None = None
 
     @property
     def device(self) -> Device:
@@ -210,6 +176,23 @@ class BatchEngine:
         return list(
             self._model.tokenize(text.encode("utf-8"), add_bos=add_bos, special=special)
         )
+
+    def tokenize_label(self, text: str) -> list[int]:
+        """按标签口径切文本: 不带 BOS, 不解析特殊标记.
+
+        输入: text -- 标签文本 (例如 "12" 或 "None");
+        输出: token id 列表;
+        预期: 与标签编译走同一口径, 保证「编出来的单 token」就是「打分时读的那个
+              token」; 两者一旦不一致, 打分位就会静默错位.
+        """
+        return self.tokenize(text, add_bos=False, special=False)
+
+    @property
+    def numeric_labels(self) -> NumericLabels:
+        """数字标签工厂 (进程内缓存), 供分块打分复用."""
+        if self._numeric_labels is None:
+            self._numeric_labels = NumericLabels(self.tokenize_label)
+        return self._numeric_labels
 
     def render(
         self,
@@ -261,17 +244,18 @@ class BatchEngine:
             mapping.append(index)
         if len(unique) > self._config.n_seq_max:
             raise EngineError(
-                f"去重后 {len(unique)} 条序列超过 n_seq_max={self._config.n_seq_max}"
+                f"deduplicated {len(unique)} sequences exceed "
+                f"n_seq_max={self._config.n_seq_max}"
             )
         unique_sequences: list[list[int]] = [[] for _ in unique]
         for key, index in unique.items():
             if not key:
-                raise EngineError(f"第 {index} 条序列为空, 没有决策位可读")
+                raise EngineError(f"sequence {index} is empty; no decision position")
             unique_sequences[index] = list(key)
         total_tokens = sum(len(tokens) for tokens in unique_sequences)
         if total_tokens > self._config.n_ctx:
             raise EngineError(
-                f"整批 {total_tokens} 个 token 超过 n_ctx={self._config.n_ctx}"
+                f"batch of {total_tokens} tokens exceeds n_ctx={self._config.n_ctx}"
             )
 
         collected: list[np.ndarray | None] = [None] * len(unique_sequences)
@@ -310,7 +294,7 @@ class BatchEngine:
 
         missing = [seq_index for seq_index, value in enumerate(collected) if value is None]
         if missing:
-            raise EngineError(f"这些序列没拿到决策位 logits: {missing}")
+            raise EngineError(f"no decision logits for sequences {missing}")
         return [collected[seq_index] for seq_index in mapping]  # type: ignore[index]
 
     def _eval_chunked_sequence(self, tokens: Sequence[int]) -> np.ndarray:
