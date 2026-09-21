@@ -3,9 +3,21 @@
 对外只暴露三块:
 - template: 官方对话模板渲染 (绝不手搓 ChatML / 裸文本) 与 EntryType 序列化;
 - labels: 受限决策标签组与组间受限 softmax;
+- chunking: 候选分块规划与跨块 log-odds 对齐 (候选数不受限);
 - engine: 批量推理引擎, 一次 llama_decode 处理整批序列, 只在决策位读 logits.
 """
 
+from .chunking import (
+    DEFAULT_CHUNK_SIZE,
+    MAX_CHUNK_SIZE,
+    Chunk,
+    ChunkAlignError,
+    ChunkPlan,
+    align_chunks,
+    chunk_log_odds,
+    global_softmax,
+    plan_chunks,
+)
 from .engine import BatchEngine, Device, EngineConfig, EngineError
 from .labels import (
     BOOL_LABEL_SPECS,
@@ -30,6 +42,10 @@ __all__ = [
     "BOOL_LABEL_SPECS",
     "BatchEngine",
     "ChatTemplateError",
+    "Chunk",
+    "ChunkAlignError",
+    "ChunkPlan",
+    "DEFAULT_CHUNK_SIZE",
     "Device",
     "EngineConfig",
     "EngineError",
@@ -37,11 +53,16 @@ __all__ = [
     "LabelResolutionError",
     "LabelSet",
     "LabelSpec",
+    "MAX_CHUNK_SIZE",
     "NONE_LABEL",
     "NumericLabels",
+    "align_chunks",
+    "chunk_log_odds",
     "get_chat_template",
+    "global_softmax",
     "is_entry",
     "label_texts",
+    "plan_chunks",
     "render_chat",
     "render_entry",
     "resolve_labels",
