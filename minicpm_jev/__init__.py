@@ -30,12 +30,15 @@ from .decision import (
     QuestionError,
     Score,
     ScoreAnswer,
+    Usage,
     answer,
+    answer_all,
     answer_choice,
     answer_noul,
     answer_score,
     normalized_peak,
     parse_question,
+    weighted_level_score,
 )
 from .runtime import (
     DEFAULT_N_CTX,
@@ -98,9 +101,11 @@ __all__ = [
     "QuestionError",
     "Score",
     "ScoreAnswer",
+    "Usage",
     "acquire_device",
     "align_chunks",
     "answer",
+    "answer_all",
     "answer_choice",
     "answer_noul",
     "answer_score",
@@ -117,4 +122,5 @@ __all__ = [
     "resolve_labels",
     "reset_device_lock",
     "validate_n_ctx",
+    "weighted_level_score",
 ]
