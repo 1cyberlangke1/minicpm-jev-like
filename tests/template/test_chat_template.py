@@ -2,7 +2,7 @@
 
 import pytest
 
-from minicpm_jev.chat_template import render_chat
+from minicpm_jev.template import render_chat
 
 SYSTEM = "你是猫猫决策引擎, 只回答 yes 或 no。"
 

@@ -28,8 +28,8 @@ import llama_cpp
 import numpy as np
 from llama_cpp import _internals as _internals
 
-from .chat_template import get_chat_template, render_chat
 from .labels import LabelSet
+from .template import get_chat_template, render_chat
 
 __all__ = ["BatchEngine", "Device", "EngineConfig", "EngineError"]
 
