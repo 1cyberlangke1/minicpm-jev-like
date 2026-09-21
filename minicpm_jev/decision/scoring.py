@@ -58,35 +58,35 @@ THINK_PREFIX = "</think>\n"
 #: choice / score 的标签引导: 收尾在 "[", 模型接着吐编号 token
 INDEX_PREFIX = THINK_PREFIX + "["
 #: 分块时锚点选项的说明 (与白皮书措辞一致)
-NONE_HINT = "[None] 以上所有选项均不合适、错误或存在严重缺陷"
+NONE_HINT = "[None] none of the options above fits, is wrong, or is harmful"
 
-# 句式约定: 背景与候选同处一条 user 消息, 结尾给【要求】, 让模型在同一段上下文里
-# 同时看到判定标准与候选范围。注意 [None] 只在**真的带锚点**时才能出现在提示里 ——
-# 单块不带锚点时标签集里没有 None, 提示却许诺 None 会让模型把票投给一个不存在的标签。
-NOUL_TASK = "【任务】根据以下背景回答问题。只允许回答 yes 或 no。"
-SCORE_TASK = "【任务】根据以下背景与档位列表，选出最符合的一个档位。"
-CONTEXT_HEADER = "【场景背景】"
-QUESTION_HEADER = "【问题】"
-CANDIDATE_HEADER = "【候选列表】"
-LEVEL_HEADER = "【档位列表】"
-REQUIREMENT_SCORE = "【要求】仅输出档位标签（如 [0]）。"
+# 句式约定: 背景单独走 system, 任务/问题/候选/要求合成一条 user 消息。
+# 骨架语言用英文 —— 与中文骨架相比判定质量打平 (noul 10/10, choice 8/8, score 4/4),
+# 而多序列批里决策位的数值漂移从 0.052 降到 0.000, 批路径与逐题单发更一致。
+# 注意 [None] 只在**真的带锚点**时才能出现在提示里 —— 单块不带锚点时标签集里没有
+# None, 提示却许诺 None 会让模型把票投给一个不存在的标签。
+NOUL_TASK = "Task: answer the question with yes or no."
+SCORE_TASK = "Task: choose the level that fits the context best."
+CONTEXT_HEADER = "Context:"
+QUESTION_HEADER = "Question:"
+CANDIDATE_HEADER = "Options:"
+LEVEL_HEADER = "Levels:"
+REQUIREMENT_SCORE = "Answer with only the level label, e.g. [0]."
 
 
 def _choice_task(with_none: bool) -> str:
     """choice 任务句. 输入: 本块是否带 None 锚点; 输出: 与标签集一致的措辞."""
+    task = "Task: choose the single best option for the question."
     if with_none:
-        return (
-            "【任务】从以下候选中选出最正确的一项。"
-            "如果所有候选都不合适，选择 [None]。"
-        )
-    return "【任务】从以下候选中选出最正确的一项。"
+        return task + " If none of the options fits, choose [None]."
+    return task
 
 
 def _choice_requirement(with_none: bool) -> str:
     """choice 要求句. 输入: 本块是否带 None 锚点; 输出: 与标签集一致的措辞."""
     if with_none:
-        return "【要求】仅输出选项标签（如 [0] 或 [None]）。"
-    return "【要求】仅输出选项标签（如 [0]）。"
+        return "Answer with only the option label, e.g. [0] or [None]."
+    return "Answer with only the option label, e.g. [0]."
 
 #: 每道题解出来的概率 (标签名 -> 概率) 喂给解码器
 PerSequence = Sequence[Mapping[str, float]]
@@ -135,26 +135,43 @@ def weighted_level_score(probabilities: Sequence[float]) -> float:
     )
 
 
-def _context_block(state: Any) -> str:
-    """背景块. 输入: 任意 EntryType; 输出: 【场景背景】+ 渲染后的文本."""
-    return f"{CONTEXT_HEADER}\n{render_entry(state)}"
+def _section(header: str, text: str) -> str:
+    """带标题的段落. 输入: 标题 + 内容; 输出: 内容为空时给空串, 否则标题换行加内容.
+
+    官方 EntryType 允许 null (渲染成空串): 空内容还挂着标题, 模型会看到一个
+    没有下文的栏目, 所以整段省略。
+    """
+    return f"{header}\n{text}" if text else ""
 
 
-def _user_message(prompt: str) -> list[dict[str, str]]:
-    """整条 prompt 只作一条 user 消息 (与实验脚本一致)."""
-    return [{"role": "user", "content": prompt}]
+def _context_message(state: Any) -> dict[str, str]:
+    """背景进 system 位. 输入: 任意 EntryType; 输出: role/content 映射."""
+    return {"role": "system", "content": _section(CONTEXT_HEADER, render_entry(state))}
 
 
-def _noul_prompt(state: Any, question: Noul) -> str:
-    """noul 的完整 prompt: 任务 + 背景 + 问题 (+ true/false 释义).
+def _messages(state: Any, prompt: str) -> list[dict[str, str]]:
+    """背景走 system, 任务/问题/候选/要求走一条 user 消息.
 
-    任务句已声明「只允许回答 yes 或 no」, 结尾不再补一条同义要求 —— 决策位前
+    背景混在 user 中段时, 模型把它当成待筛选的材料一起处理, 判定质量明显更差;
+    单独放 system 它才被当既定前提读。
+    """
+    context = _context_message(state)
+    built: list[dict[str, str]] = []
+    if context["content"]:
+        built.append(context)
+    built.append({"role": "user", "content": prompt})
+    return built
+
+
+def _noul_prompt(question: Noul) -> str:
+    """noul 的 user 段: 任务 + 问题 (+ true/false 释义).
+
+    任务句已声明只回答 yes 或 no, 结尾不再补一条同义要求 —— 决策位前
     若压着一条元指令, 模型会去续写指令本身, 而不是回答问句。
     """
     parts = [
         NOUL_TASK,
-        _context_block(state),
-        f"{QUESTION_HEADER}\n{render_entry(question.instructions)}",
+        _section(QUESTION_HEADER, render_entry(question.instructions)),
     ]
     criteria = question.criteria or {}
     true_hint = render_entry(criteria.get("true"))
@@ -162,47 +179,49 @@ def _noul_prompt(state: Any, question: Noul) -> str:
     if true_hint or false_hint:
         lines = []
         if true_hint:
-            lines.append(f"yes 表示：{true_hint}")
+            lines.append(f"yes means: {true_hint}")
         if false_hint:
-            lines.append(f"no 表示：{false_hint}")
-        parts.append("【判定标准】\n" + "\n".join(lines))
-    return "\n\n".join(parts)
+            lines.append(f"no means: {false_hint}")
+        parts.append(_section("Criteria:", "\n".join(lines)))
+    return "\n\n".join(part for part in parts if part)
 
 
-def _choice_prompt(state: Any, question: Choice, chunk: Chunk) -> str:
-    """choice 的完整 prompt: 任务 + 背景 + 问题 + 本块候选 (块内局部编号) + 要求."""
+def _choice_prompt(question: Choice, chunk: Chunk) -> str:
+    """choice 的 user 段: 任务 + 问题 + 本块候选 (块内局部编号) + 要求."""
     items = list(question.criteria.items())[chunk.start : chunk.stop]
     options: list[str] = []
     for local_index, (name, description) in enumerate(items):
         text = render_entry(description)
-        options.append(f"[{local_index}] {name}" + (f"：{text}" if text else ""))
+        options.append(f"[{local_index}] {name}" + (f" - {text}" if text else ""))
     if chunk.with_none:
         options.append(NONE_HINT)
     return "\n\n".join(
-        [
+        part
+        for part in (
             _choice_task(chunk.with_none),
-            _context_block(state),
-            f"{QUESTION_HEADER}\n{render_entry(question.instructions)}",
-            CANDIDATE_HEADER + "\n" + "\n".join(options),
+            _section(QUESTION_HEADER, render_entry(question.instructions)),
+            _section(CANDIDATE_HEADER, "\n".join(options)),
             _choice_requirement(chunk.with_none),
-        ]
+        )
+        if part
     )
 
 
-def _score_prompt(state: Any, question: Score) -> str:
-    """score 的完整 prompt: 任务 + 背景 + 问题 + 档位表 + 要求."""
+def _score_prompt(question: Score) -> str:
+    """score 的 user 段: 任务 + 问题 + 档位表 + 要求."""
     levels = [
-        f"[{index}] {render_entry(level)}"
+        f"[{index}] {render_entry(level)}".rstrip()
         for index, level in enumerate(question.criteria)
     ]
     return "\n\n".join(
-        [
+        part
+        for part in (
             SCORE_TASK,
-            _context_block(state),
-            f"{QUESTION_HEADER}\n{render_entry(question.instructions)}",
-            LEVEL_HEADER + "\n" + "\n".join(levels),
+            _section(QUESTION_HEADER, render_entry(question.instructions)),
+            _section(LEVEL_HEADER, "\n".join(levels)),
             REQUIREMENT_SCORE,
-        ]
+        )
+        if part
     )
 
 
@@ -219,7 +238,7 @@ def _plan_noul(engine: BatchEngine, state: Any, question: Noul) -> _Plan:
     """noul 规划: 一条序列, 标签是 yes/no 全书写变体组."""
     labels = resolve_labels(engine.tokenize_label, BOOL_LABEL_SPECS)
     tokens = engine.render_tokens(
-        _user_message(_noul_prompt(state, question)),
+        _messages(state, _noul_prompt(question)),
         assistant_prefix=THINK_PREFIX,
     )
 
@@ -245,7 +264,7 @@ def _plan_choice(
         )
         sequences.append(
             engine.render_tokens(
-                _user_message(_choice_prompt(state, question, chunk)),
+                _messages(state, _choice_prompt(question, chunk)),
                 assistant_prefix=INDEX_PREFIX,
             )
         )
@@ -269,7 +288,7 @@ def _plan_score(engine: BatchEngine, state: Any, question: Score) -> _Plan:
     level_count = len(question.criteria)
     labels = engine.numeric_labels.get(level_count, with_none=False)
     tokens = engine.render_tokens(
-        _user_message(_score_prompt(state, question)),
+        _messages(state, _score_prompt(question)),
         assistant_prefix=INDEX_PREFIX,
     )
 

@@ -2,6 +2,7 @@
 
 import pytest
 
+from minicpm_jev.chunking import plan_chunks
 from minicpm_jev.decision import (
     Choice,
     ChoiceAnswer,
@@ -16,6 +17,7 @@ from minicpm_jev.decision import (
     answer_noul,
     answer_score,
 )
+from minicpm_jev.decision.scoring import _choice_prompt, _score_prompt
 
 
 def test_noul_true_question_is_confident_yes(engine) -> None:
@@ -100,6 +102,36 @@ def test_choice_single_chunk_matches_chunked_ranking(engine) -> None:
         engine, "Answer with common sense.", question, chunk_size=2
     )
     assert single.choice == chunked.choice
+
+
+def test_choice_without_descriptions_still_decides(engine) -> None:
+    """官方允许 criteria 的值为 null (选项只有名字): 没描述也要能选出正确项."""
+    question = Choice(
+        instructions="Which animal says meow?",
+        criteria={"cat": None, "dog": None, "cow": None},
+    )
+    result = answer_choice(engine, "Answer with common sense.", question)
+    assert result.choice == "cat"
+    assert set(result.probabilities) == {"cat", "dog", "cow"}
+    assert sum(result.probabilities.values()) == pytest.approx(1.0)
+
+
+def test_prompt_omits_empty_sections() -> None:
+    """null 字段渲染成空串时整段省略: 不留空标题, 也不留尾随空格."""
+    chunk = plan_chunks(2, 128).chunks[0]
+    prompt = _choice_prompt(
+        Choice(instructions=None, criteria={"a": None, "b": None}), chunk
+    )
+    assert "Question:" not in prompt
+    assert "[0] a" in prompt
+    assert "[1] b" in prompt
+    assert all(line == line.rstrip() for line in prompt.splitlines())
+
+    score_prompt = _score_prompt(
+        Score(instructions="Rate it.", criteria=["low", None])
+    )
+    assert "[1]" in score_prompt
+    assert "[1] " not in score_prompt
 
 
 def test_score_is_probability_weighted_average(engine) -> None:
