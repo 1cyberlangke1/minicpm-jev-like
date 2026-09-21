@@ -38,6 +38,15 @@ def test_noul_false_question_is_confident_no(engine) -> None:
     assert result.noul < 0.5
 
 
+def test_noul_water_is_wet(engine) -> None:
+    """水是湿的: 单发路径下 noul 概率偏向 yes (只测单发, 不跨批比差)."""
+    result = answer_noul(
+        engine, "General common sense.", Noul(instructions="Is water wet?")
+    )
+    assert isinstance(result, NoulAnswer)
+    assert result.noul > 0.5
+
+
 def test_choice_single_chunk_picks_expected_option(engine) -> None:
     """单块 (3 个候选): 概率和为 1, 命中语义正确项, 置信度在 [0, 1]."""
     question = Choice(
@@ -227,25 +236,88 @@ def test_answer_all_calls_engine_once(engine, monkeypatch) -> None:
     assert calls[0] == 3
 
 
-def test_answer_all_matches_individual_calls(engine) -> None:
-    """批量的结论与逐题单发一致 (题型与 argmax 都要对上)."""
-    state = "On a clear day, answer with common sense."
-    questions = {
-        "sky": Choice(
-            instructions="What color does the sky appear?",
+def test_every_request_field_reaches_the_model(engine, monkeypatch) -> None:
+    """回归: state / instructions / 选项名与描述 / 档位 / 判定标准都要真的进 prompt.
+
+    之前 choice 整段漏掉 instructions (问句没进上下文), 只断言「选出正确项」是发现
+    不了的, 所以这里把真正喂给模型的 token 序列解回文本, 逐字段核对。
+    """
+    seen: list[str] = []
+    original = engine.score
+
+    def spy(sequences, labels):
+        seen.extend(
+            engine._model.detokenize(list(sequence)).decode("utf-8", "replace")
+            for sequence in sequences
+        )
+        return original(sequences, labels)
+
+    monkeypatch.setattr(engine, "score", spy)
+    state = "STATE_MARKER_a1"
+
+    answer_noul(
+        engine,
+        state,
+        Noul(
+            instructions="NOUL_QUESTION_b2",
+            criteria={"true": "TRUE_HINT_c3", "false": "FALSE_HINT_d4"},
+        ),
+    )
+    for marker in (state, "NOUL_QUESTION_b2", "TRUE_HINT_c3", "FALSE_HINT_d4"):
+        assert marker in seen[-1], f"noul 的 {marker} 没进 prompt"
+
+    seen.clear()
+    answer_choice(
+        engine,
+        state,
+        Choice(
+            instructions="CHOICE_QUESTION_e5",
+            criteria={"option_one": "DESC_ONE_f6", "option_two": None},
+        ),
+    )
+    for marker in (
+        state,
+        "CHOICE_QUESTION_e5",
+        "option_one",
+        "DESC_ONE_f6",
+        "option_two",
+    ):
+        assert marker in seen[-1], f"choice 的 {marker} 没进 prompt"
+
+    seen.clear()
+    answer_choice(
+        engine,
+        state,
+        Choice(
+            instructions="CHUNKED_QUESTION_j0",
             criteria={
-                "blue": "the clear daytime sky",
-                "green": "grass and leaves",
-                "red": "fresh blood",
+                "first_option": "FIRST_DESC_k1",
+                "second_option": "SECOND_DESC_l2",
             },
         ),
-        "wet": Noul(instructions="Is water wet?"),
-    }
-    batched = answer_all(engine, state, questions)
-    assert batched["sky"].choice == answer(engine, state, questions["sky"]).choice
-    assert batched["wet"].noul == pytest.approx(
-        answer(engine, state, questions["wet"]).noul, abs=0.05
+        chunk_size=1,
     )
+    joined = "\n".join(seen)
+    for marker in (
+        "first_option",
+        "FIRST_DESC_k1",
+        "second_option",
+        "SECOND_DESC_l2",
+        "[None]",
+    ):
+        assert marker in joined, f"分块时 {marker} 没进 prompt"
+
+    seen.clear()
+    answer_score(
+        engine,
+        state,
+        Score(
+            instructions="SCORE_QUESTION_g7",
+            criteria=["LEVEL_ONE_h8", "LEVEL_TWO_i9"],
+        ),
+    )
+    for marker in (state, "SCORE_QUESTION_g7", "LEVEL_ONE_h8", "LEVEL_TWO_i9"):
+        assert marker in seen[-1], f"score 的 {marker} 没进 prompt"
 
 
 def test_answer_all_usage_counts_every_sequence(engine) -> None:
