@@ -7,6 +7,12 @@ prompt 结构 (铁律, 不许手搓标记):
 - assistant 预填 = 思考段截断 + 标签引导 (choice / score 用 ``[``, noul 不加),
   走库函数的 ``assistant_prefix``, 不碰模板标记。
 
+批 (一次请求一次 decode):
+
+- 先把每道题**规划**成若干条序列 + 每条的标签集 + 一个解码器;
+- 所有题目的序列拼成**一个**批交给引擎, 只调一次 ``engine.score``;
+- 再按切片把结果还回各题 —— 这样同一个 state 前缀只在一批里算, 不逐题单发。
+
 分块 (choice 的候选数不受限):
 
 - ``N <= chunk_size`` 单块, 标签 ``0`` ~ ``N-1``, **不带锚点**;
@@ -17,12 +23,12 @@ prompt 结构 (铁律, 不许手搓标记):
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from ..chunking import DEFAULT_CHUNK_SIZE, Chunk, align_chunks, plan_chunks
-from ..labels import BOOL_LABEL_SPECS, resolve_labels
+from ..labels import BOOL_LABEL_SPECS, LabelSet, resolve_labels
 from ..runtime import BatchEngine
 from ..template import render_entry
 from .confidence import normalized_peak
@@ -40,6 +46,7 @@ from .primitives import (
 __all__ = [
     "Usage",
     "answer",
+    "answer_all",
     "answer_choice",
     "answer_noul",
     "answer_score",
@@ -52,6 +59,11 @@ THINK_PREFIX = "</think>\n"
 INDEX_PREFIX = THINK_PREFIX + "["
 #: 分块时锚点选项的说明 (与白皮书措辞一致)
 NONE_HINT = "[None] 以上所有选项均不合适、错误或存在严重缺陷"
+
+#: 每道题解出来的概率 (标签名 -> 概率) 喂给解码器
+PerSequence = Sequence[Mapping[str, float]]
+#: 把「属于自己那道题的那几条概率」解成答案
+Decoder = Callable[[PerSequence], Answer]
 
 
 @dataclass
@@ -136,46 +148,39 @@ def _score_user(question: Score) -> str:
     return "\n".join(lines)
 
 
-def answer_noul(
-    engine: BatchEngine,
-    state: Any,
-    question: Noul,
-    *,
-    usage: Usage | None = None,
-) -> NoulAnswer:
-    """noul 决策.
+@dataclass(frozen=True)
+class _Plan:
+    """一道题在整批里的切片与解码方式."""
 
-    输入: engine -- 批量引擎; state -- 请求级背景; question -- Noul;
-    输出: NoulAnswer (noul = P(yes));
-    预期: 走官方模板 + 思考段截断; 标签是 yes/no 的全书写变体组。
-    """
+    sequences: list[list[int]]
+    label_sets: list[LabelSet]
+    decode: Decoder
+
+
+def _plan_noul(engine: BatchEngine, state: Any, question: Noul) -> _Plan:
+    """noul 规划: 一条序列, 标签是 yes/no 全书写变体组."""
     labels = resolve_labels(engine.tokenize_label, BOOL_LABEL_SPECS)
     tokens = engine.render_tokens(
         [_system_message(state), {"role": "user", "content": _noul_user(question)}],
         assistant_prefix=THINK_PREFIX,
     )
-    _record_usage(usage, [tokens])
-    probabilities = engine.score([tokens], labels)[0]
-    return NoulAnswer(noul=probabilities["true"])
+
+    def decode(probabilities: PerSequence) -> Answer:
+        return NoulAnswer(noul=probabilities[0]["true"])
+
+    return _Plan([tokens], [labels], decode)
 
 
-def answer_choice(
+def _plan_choice(
     engine: BatchEngine,
     state: Any,
     question: Choice,
-    *,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-    usage: Usage | None = None,
-) -> ChoiceAnswer:
-    """choice 决策 (候选数不受限).
-
-    输入: engine; state; question -- Choice; chunk_size -- 分块窗口 (0, 128];
-    输出: ChoiceAnswer (choice = 全局概率最高的选项);
-    预期: 单块不加锚点, 分块每块补 None 并用 log-odds 拉平; 概率和恒为 1。
-    """
+    chunk_size: int,
+) -> _Plan:
+    """choice 规划: 每个候选块一条序列, 块内局部编号 (+ 分块时的 None 锚点)."""
     plan = plan_chunks(len(question.criteria), chunk_size)
     sequences: list[list[int]] = []
-    label_sets = []
+    label_sets: list[LabelSet] = []
     for chunk in plan.chunks:
         label_sets.append(
             engine.numeric_labels.get(chunk.count, with_none=chunk.with_none)
@@ -189,52 +194,103 @@ def answer_choice(
                 assistant_prefix=INDEX_PREFIX,
             )
         )
-    _record_usage(usage, sequences)
-    aligned = align_chunks(engine.score(sequences, label_sets))
     names = list(question.criteria)
-    probabilities = {name: value for name, value in zip(names, aligned)}
-    best = max(probabilities, key=lambda name: probabilities[name])
-    return ChoiceAnswer(
-        choice=best,
-        probabilities=probabilities,
-        confidence=normalized_peak(list(probabilities.values())),
-    )
+
+    def decode(probabilities: PerSequence) -> Answer:
+        aligned = align_chunks(probabilities)
+        combined = {name: value for name, value in zip(names, aligned)}
+        best = max(combined, key=lambda name: combined[name])
+        return ChoiceAnswer(
+            choice=best,
+            probabilities=combined,
+            confidence=normalized_peak(list(combined.values())),
+        )
+
+    return _Plan(sequences, label_sets, decode)
 
 
-def answer_score(
-    engine: BatchEngine,
-    state: Any,
-    question: Score,
-    *,
-    usage: Usage | None = None,
-) -> ScoreAnswer:
-    """score 决策: 档位上的概率加权值.
-
-    输入: engine; state; question -- Score (2~10 档);
-    输出: ScoreAnswer (score = Σ p_i · i, legend / probabilities 按官方形状回填);
-    预期: 档位编号就是档位值, 不做百分制映射; 天然单块, 不带锚点。
-    """
+def _plan_score(engine: BatchEngine, state: Any, question: Score) -> _Plan:
+    """score 规划: 一条序列, 档位编号 0~M-1 天然单块 (不带锚点)."""
     level_count = len(question.criteria)
     labels = engine.numeric_labels.get(level_count, with_none=False)
     tokens = engine.render_tokens(
         [_system_message(state), {"role": "user", "content": _score_user(question)}],
         assistant_prefix=INDEX_PREFIX,
     )
-    _record_usage(usage, [tokens])
-    probabilities = engine.score([tokens], labels)[0]
-    ordered = [probabilities[str(index)] for index in range(level_count)]
-    score = weighted_level_score(ordered)
-    return ScoreAnswer(
-        score=score,
-        legend={
-            str(index): render_entry(level)
-            for index, level in enumerate(question.criteria)
-        },
-        probabilities={
-            str(index): probability for index, probability in enumerate(ordered)
-        },
-        confidence=normalized_peak(ordered),
-    )
+
+    def decode(probabilities: PerSequence) -> Answer:
+        single = probabilities[0]
+        ordered = [single[str(index)] for index in range(level_count)]
+        return ScoreAnswer(
+            score=weighted_level_score(ordered),
+            legend={
+                str(index): render_entry(level)
+                for index, level in enumerate(question.criteria)
+            },
+            probabilities={
+                str(index): probability for index, probability in enumerate(ordered)
+            },
+            confidence=normalized_peak(ordered),
+        )
+
+    return _Plan([tokens], [labels], decode)
+
+
+def _plan(
+    engine: BatchEngine,
+    state: Any,
+    question: Question,
+    chunk_size: int,
+) -> _Plan:
+    """按题型规划. 预期: 未知类型抛 TypeError, 不静默跳过."""
+    if isinstance(question, Noul):
+        return _plan_noul(engine, state, question)
+    if isinstance(question, Choice):
+        return _plan_choice(engine, state, question, chunk_size)
+    if isinstance(question, Score):
+        return _plan_score(engine, state, question)
+    raise TypeError(f"unsupported question type: {type(question).__name__}")
+
+
+def answer_all(
+    engine: BatchEngine,
+    state: Any,
+    questions: Mapping[str, Question],
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    usage: Usage | None = None,
+) -> dict[str, Answer]:
+    """一次请求里的所有问题走**一个**批.
+
+    输入: engine; state; questions -- 题名 -> 题目; chunk_size -- 候选窗口;
+          usage -- 可选统计累加器;
+    输出: 题名 -> 答案 (顺序与输入一致);
+    预期: 只调一次 engine.score (同批序列由引擎按哈希去重并并行 prefill);
+          questions 为空抛 ValueError, 不返回空结果。
+    """
+    if not questions:
+        raise ValueError("questions must not be empty")
+
+    plans = {
+        question_id: _plan(engine, state, question, chunk_size)
+        for question_id, question in questions.items()
+    }
+    sequences: list[list[int]] = []
+    label_sets: list[LabelSet] = []
+    for plan in plans.values():
+        sequences.extend(plan.sequences)
+        label_sets.extend(plan.label_sets)
+
+    _record_usage(usage, sequences)
+    scored = engine.score(sequences, label_sets)
+
+    results: dict[str, Answer] = {}
+    cursor = 0
+    for question_id, plan in plans.items():
+        width = len(plan.sequences)
+        results[question_id] = plan.decode(scored[cursor : cursor + width])
+        cursor += width
+    return results
 
 
 def answer(
@@ -245,16 +301,46 @@ def answer(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     usage: Usage | None = None,
 ) -> Answer:
-    """按题型分发.
+    """单题决策 (answer_all 的薄包装, 方便按题调用与测试).
 
-    输入: engine; state; question -- 三原语之一; chunk_size -- 仅 choice 用;
-    输出: 对应的 Answer;
-    预期: 未知类型直接抛 TypeError (调用方应先 parse_question 校验过).
+    输入: engine; state; question -- 三原语之一; chunk_size; usage;
+    输出: 对应答案;
+    预期: 走与批量完全相同的代码路径, 不另起一套。
     """
-    if isinstance(question, Noul):
-        return answer_noul(engine, state, question, usage=usage)
-    if isinstance(question, Choice):
-        return answer_choice(engine, state, question, chunk_size=chunk_size, usage=usage)
-    if isinstance(question, Score):
-        return answer_score(engine, state, question, usage=usage)
-    raise TypeError(f"unsupported question type: {type(question).__name__}")
+    return answer_all(
+        engine,
+        state,
+        {"question": question},
+        chunk_size=chunk_size,
+        usage=usage,
+    )["question"]
+
+
+def answer_noul(engine: BatchEngine, state: Any, question: Noul) -> NoulAnswer:
+    """noul 单题便捷入口. 输出: NoulAnswer (noul = P(yes))."""
+    result = answer(engine, state, question)
+    if not isinstance(result, NoulAnswer):  # pragma: no cover - 类型收窄
+        raise TypeError("expected NoulAnswer")
+    return result
+
+
+def answer_choice(
+    engine: BatchEngine,
+    state: Any,
+    question: Choice,
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> ChoiceAnswer:
+    """choice 单题便捷入口. 输出: ChoiceAnswer (choice = 全局概率最高项)."""
+    result = answer(engine, state, question, chunk_size=chunk_size)
+    if not isinstance(result, ChoiceAnswer):  # pragma: no cover - 类型收窄
+        raise TypeError("expected ChoiceAnswer")
+    return result
+
+
+def answer_score(engine: BatchEngine, state: Any, question: Score) -> ScoreAnswer:
+    """score 单题便捷入口. 输出: ScoreAnswer (score = Σ p_i · i)."""
+    result = answer(engine, state, question)
+    if not isinstance(result, ScoreAnswer):  # pragma: no cover - 类型收窄
+        raise TypeError("expected ScoreAnswer")
+    return result

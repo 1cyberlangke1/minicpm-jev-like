@@ -9,7 +9,9 @@ from minicpm_jev.decision import (
     NoulAnswer,
     Score,
     ScoreAnswer,
+    Usage,
     answer,
+    answer_all,
     answer_choice,
     answer_noul,
     answer_score,
@@ -155,3 +157,84 @@ def test_answer_rejects_unknown_type(engine) -> None:
     """非三原语对象直接 TypeError, 不静默返回空答案."""
     with pytest.raises(TypeError):
         answer(engine, "x", "not a question")  # type: ignore[arg-type]
+
+
+def _mixed_questions() -> dict:
+    """三原语各一道, 用来验批处理路径."""
+    return {
+        "urgent": Noul(instructions="Is this message urgent?"),
+        "team": Choice(
+            instructions="Which team should handle this?",
+            criteria={"billing": "payments and invoices", "tech": "technical issues"},
+        ),
+        "anger": Score(
+            instructions="How angry is the customer?",
+            criteria=["calm", "mildly annoyed", "angry"],
+        ),
+    }
+
+
+def test_answer_all_calls_engine_once(engine, monkeypatch) -> None:
+    """一次请求里的多个问题只准调一次 engine.score (同批并行 prefill)."""
+    calls: list[int] = []
+    original = engine.score
+
+    def spy(sequences, labels):
+        calls.append(len(sequences))
+        return original(sequences, labels)
+
+    monkeypatch.setattr(engine, "score", spy)
+    answers = answer_all(
+        engine,
+        "Ticket: my order is late again and nobody answers my emails.",
+        _mixed_questions(),
+    )
+    assert set(answers) == {"urgent", "team", "anger"}
+    assert len(calls) == 1, "多问题必须合成一批, 不能逐题单发"
+    # noul 1 条 + choice 1 条 (2 个候选 = 单块) + score 1 条
+    assert calls[0] == 3
+
+
+def test_answer_all_matches_individual_calls(engine) -> None:
+    """批量的结论与逐题单发一致 (题型与 argmax 都要对上)."""
+    state = "On a clear day, answer with common sense."
+    questions = {
+        "sky": Choice(
+            instructions="What color does the sky appear?",
+            criteria={
+                "blue": "the clear daytime sky",
+                "green": "grass and leaves",
+                "red": "fresh blood",
+            },
+        ),
+        "wet": Noul(instructions="Is water wet?"),
+    }
+    batched = answer_all(engine, state, questions)
+    assert batched["sky"].choice == answer(engine, state, questions["sky"]).choice
+    assert batched["wet"].noul == pytest.approx(
+        answer(engine, state, questions["wet"]).noul, abs=0.05
+    )
+
+
+def test_answer_all_usage_counts_every_sequence(engine) -> None:
+    """usage 按官方语义统计「去重前全部序列的 token 数」."""
+    state = "General common sense."
+    questions = _mixed_questions()
+
+    batch_usage = Usage()
+    answer_all(engine, state, questions, usage=batch_usage)
+
+    total = 0
+    for question in questions.values():
+        single_usage = Usage()
+        answer(engine, state, question, usage=single_usage)
+        total += single_usage.input_tokens
+
+    assert batch_usage.input_tokens == total
+    assert batch_usage.output_tokens == 1
+
+
+def test_answer_all_rejects_empty_questions(engine) -> None:
+    """没有题目就没有答案, 直接报错."""
+    with pytest.raises(ValueError):
+        answer_all(engine, "x", {})

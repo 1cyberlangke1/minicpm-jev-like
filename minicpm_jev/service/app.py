@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ..config import Settings
-from ..decision import QuestionError, Usage, answer, parse_question
+from ..decision import Question, QuestionError, Usage, answer_all, parse_question
 from .auth import AuthGuard
 from .errors import (
     AuthenticationError,
@@ -102,26 +102,27 @@ def create_app(
                 raise OverloadedError(
                     "Service is busy loading a model. Please retry shortly."
                 )
-            engine = await manager.ensure(model_name)
-            usage = Usage()
-            answers: dict[str, object] = {}
+            questions: dict[str, Question] = {}
             for question_id, raw in body.questions.items():
                 try:
-                    question = parse_question(raw)
+                    questions[question_id] = parse_question(raw)
                 except QuestionError as error:
                     raise UnprocessableError(
                         str(error), loc=("body", "questions", question_id)
                     ) from error
-                result = answer(
-                    engine,
-                    body.state,
-                    question,
-                    chunk_size=resolved.chunk_size,
-                    usage=usage,
-                )
-                answers[question_id] = result.to_dict()
+            engine = await manager.ensure(model_name)
+            usage = Usage()
+            answered = answer_all(
+                engine,
+                body.state,
+                questions,
+                chunk_size=resolved.chunk_size,
+                usage=usage,
+            )
             return SystemOneResponse(
-                model=model_name, answers=answers, usage=usage.to_dict()
+                model=model_name,
+                answers={qid: item.to_dict() for qid, item in answered.items()},
+                usage=usage.to_dict(),
             )
 
     return app

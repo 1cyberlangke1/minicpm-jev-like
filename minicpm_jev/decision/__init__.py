@@ -23,6 +23,7 @@ from .primitives import (
 from .scoring import (
     Usage,
     answer,
+    answer_all,
     answer_choice,
     answer_noul,
     answer_score,
@@ -43,6 +44,7 @@ __all__ = [
     "ScoreAnswer",
     "Usage",
     "answer",
+    "answer_all",
     "answer_choice",
     "answer_noul",
     "answer_score",
