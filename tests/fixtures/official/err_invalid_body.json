@@ -1,0 +1,38 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "x",
+    "questions": {}
+  },
+  "status": 422,
+  "body": {
+    "detail": [
+      {
+        "type": "missing",
+        "loc": [
+          "body",
+          "model"
+        ],
+        "msg": "Field required",
+        "input": {
+          "state": "x",
+          "questions": {}
+        }
+      },
+      {
+        "type": "too_short",
+        "loc": [
+          "body",
+          "questions"
+        ],
+        "msg": "Dictionary should have at least 1 item after validation, not 0",
+        "input": {},
+        "ctx": {
+          "field_type": "Dictionary",
+          "min_length": 1,
+          "actual_length": 0
+        }
+      }
+    ]
+  }
+}

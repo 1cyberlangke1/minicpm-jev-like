@@ -1,0 +1,30 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "Customer: I ordered a hot dog at noon and it arrived stone cold at 1:30 PM. I want my money back.",
+    "model": "jev-latest",
+    "questions": {
+      "refund": {
+        "type": "noul",
+        "instructions": "Does the customer explicitly request a refund?"
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "refund": {
+        "type": "noul",
+        "noul": 0.98
+      }
+    },
+    "usage": {
+      "input_tokens": 302,
+      "output_tokens": 20
+    }
+  },
+  "notes": {
+    "source": "preset1: 热狗退款 (单值判断)"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "x",
+    "model": "no-such-model-xyz",
+    "questions": {
+      "q": {
+        "type": "noul",
+        "instructions": "Is this fine?"
+      }
+    }
+  },
+  "status": 400,
+  "body": {
+    "detail": {
+      "error_type": "api_usage_error",
+      "message": "Unknown model: no-such-model-xyz"
+    }
+  }
+}

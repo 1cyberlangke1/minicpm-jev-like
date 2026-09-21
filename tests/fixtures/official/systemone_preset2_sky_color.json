@@ -1,0 +1,41 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "",
+    "model": "jev-latest",
+    "questions": {
+      "sky_color": {
+        "type": "choice",
+        "instructions": "What color does the sky appear?",
+        "criteria": {
+          "blue": "Rayleigh scattering of short wavelengths",
+          "green": "filtered by clouds",
+          "red": "only near sunset"
+        }
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "sky_color": {
+        "type": "choice",
+        "choice": "blue",
+        "confidence": 1.0,
+        "probabilities": {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 1.0
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 329,
+      "output_tokens": 39
+    }
+  },
+  "notes": {
+    "source": "preset2: 天空颜色 (单项选择, state 为空串)"
+  }
+}

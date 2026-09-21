@@ -1,0 +1,45 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "[\n  {\n    \"role\": \"user\",\n    \"text\": \"hey, did my refund arrive yet?\"\n  },\n  {\n    \"role\": \"agent\",\n    \"text\": \"let me check the payment system\"\n  }\n]",
+    "model": "jev-latest",
+    "questions": {
+      "intent": {
+        "type": "choice",
+        "instructions": "Classify the latest user intent.",
+        "criteria": {
+          "refund_status": {
+            "topic": "money",
+            "detail": "asking about a pending refund"
+          },
+          "small_talk": {
+            "topic": "other",
+            "detail": "greeting or chatter"
+          }
+        }
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "intent": {
+        "type": "choice",
+        "choice": "refund_status",
+        "confidence": 1.0,
+        "probabilities": {
+          "small_talk": 0.0,
+          "refund_status": 1.0
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 396,
+      "output_tokens": 35
+    }
+  },
+  "notes": {
+    "source": "preset5: 结构化上下文与复杂标准 (chat log + 字典 criteria)"
+  }
+}

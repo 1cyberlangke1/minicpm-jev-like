@@ -1,0 +1,79 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "客户：我昨天在你们店买的蓝牙耳机只有一个耳朵有声音，客服让我等三天了还没回复，今天必须给我解决，不然我就投诉到消费者协会！",
+    "model": "jev-latest",
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "这条消息是否表达了真实的紧急情绪？"
+      },
+      "department": {
+        "type": "choice",
+        "instructions": "这个问题应该由哪个部门处理？",
+        "criteria": {
+          "售后": "产品质量与退换",
+          "技术": "软件与网络故障",
+          "物流": "发货与配送"
+        }
+      },
+      "anger": {
+        "type": "score",
+        "instructions": "客户的愤怒程度打几分？",
+        "criteria": [
+          "平静",
+          "有点不满",
+          "生气",
+          "很生气",
+          "暴怒"
+        ]
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "is_urgent": {
+        "type": "noul",
+        "noul": 0.85
+      },
+      "department": {
+        "type": "choice",
+        "choice": "售后",
+        "confidence": 1.0,
+        "probabilities": {
+          "售后": 1.0,
+          "物流": 0.0,
+          "技术": 0.0
+        }
+      },
+      "anger": {
+        "type": "score",
+        "score": 3.0,
+        "confidence": 0.97,
+        "legend": {
+          "0": "平静",
+          "1": "有点不满",
+          "2": "生气",
+          "3": "很生气",
+          "4": "暴怒"
+        },
+        "probabilities": {
+          "0": 0.0,
+          "1": 0.0,
+          "2": 0.02,
+          "3": 0.96,
+          "4": 0.02
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 491,
+      "output_tokens": 73
+    }
+  },
+  "notes": {
+    "source": "preset6: 中文工单三连问"
+  }
+}

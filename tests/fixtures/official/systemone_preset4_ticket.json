@@ -1,0 +1,79 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "Ticket #4021: My payments have been failing for 3 days, I was charged twice, and I have been on hold for an hour. Fix it today or I am leaving.",
+    "model": "jev-latest",
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "Does this message convey real urgency?"
+      },
+      "department": {
+        "type": "choice",
+        "instructions": "Which team should own this ticket?",
+        "criteria": {
+          "billing": "payments and invoices",
+          "tech": "technical issues",
+          "ops": "logistics"
+        }
+      },
+      "frustration": {
+        "type": "score",
+        "instructions": "How frustrated is the customer?",
+        "criteria": [
+          "calm",
+          "mildly annoyed",
+          "frustrated",
+          "very frustrated",
+          "furious"
+        ]
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "is_urgent": {
+        "type": "noul",
+        "noul": 0.91
+      },
+      "department": {
+        "type": "choice",
+        "choice": "billing",
+        "confidence": 1.0,
+        "probabilities": {
+          "billing": 1.0,
+          "tech": 0.0,
+          "ops": 0.0
+        }
+      },
+      "frustration": {
+        "type": "score",
+        "score": 3.74,
+        "confidence": 0.78,
+        "legend": {
+          "0": "calm",
+          "1": "mildly annoyed",
+          "2": "frustrated",
+          "3": "very frustrated",
+          "4": "furious"
+        },
+        "probabilities": {
+          "0": 0.0,
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.26,
+          "4": 0.74
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 435,
+      "output_tokens": 73
+    }
+  },
+  "notes": {
+    "source": "preset4: 工单三连问 (复合决策)"
+  }
+}

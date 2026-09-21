@@ -1,0 +1,52 @@
+{
+  "endpoint": "POST /v1/systemone",
+  "request": {
+    "state": "An unattended monkey smacked paint onto this canvas. Critics are debating its artistic merit.",
+    "model": "jev-latest",
+    "questions": {
+      "quality": {
+        "type": "score",
+        "instructions": "Rate the artistic quality of the painting.",
+        "criteria": [
+          "amateur",
+          "decent",
+          "good",
+          "great",
+          "masterpiece"
+        ]
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "quality": {
+        "type": "score",
+        "score": 0.08,
+        "confidence": 0.93,
+        "legend": {
+          "0": "amateur",
+          "1": "decent",
+          "2": "good",
+          "3": "great",
+          "4": "masterpiece"
+        },
+        "probabilities": {
+          "0": 0.95,
+          "1": 0.04,
+          "2": 0.01,
+          "3": 0.0,
+          "4": 0.0
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 335,
+      "output_tokens": 17
+    }
+  },
+  "notes": {
+    "source": "preset3: 猴子作画 (等级评分)"
+  }
+}
