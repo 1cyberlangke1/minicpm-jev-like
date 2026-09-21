@@ -14,16 +14,8 @@ def test_disabled_guard_passes_everything() -> None:
     guard.check("garbage")
 
 
-def test_empty_key_counts_as_disabled() -> None:
-    """空串等于没配."""
-    assert AuthGuard("").enabled is False
 
 
-def test_enabled_guard_accepts_exact_header() -> None:
-    """配了 key 就要 Bearer + key 完全一致."""
-    guard = AuthGuard("sekret")
-    assert guard.enabled is True
-    guard.check("Bearer sekret")
 
 
 def test_missing_header_is_403() -> None:

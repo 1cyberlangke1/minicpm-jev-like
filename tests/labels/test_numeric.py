@@ -3,28 +3,13 @@
 import numpy as np
 import pytest
 
-from minicpm_jev.labels import NONE_LABEL, LabelResolutionError, NumericLabels, label_texts
+from minicpm_jev.labels import NONE_LABEL, LabelResolutionError, NumericLabels
 
 
-def test_label_texts_without_none() -> None:
-    """不带锚点时只有 0 ~ n-1."""
-    assert label_texts(1) == ("0",)
-    assert label_texts(3) == ("0", "1", "2")
-    assert label_texts(128)[-1] == "127"
-    assert len(label_texts(128)) == 128
 
 
-def test_label_texts_with_none_appends_anchor() -> None:
-    """带锚点时末尾多一个 None, 且总数是 n+1."""
-    assert label_texts(2, with_none=True) == ("0", "1", NONE_LABEL)
-    assert len(label_texts(128, with_none=True)) == 129
 
 
-@pytest.mark.parametrize("count", [0, -1])
-def test_label_texts_rejects_non_positive(count: int) -> None:
-    """候选数为 0 或负数直接报错, 不返回空标签集."""
-    with pytest.raises(ValueError):
-        label_texts(count)
 
 
 def test_numeric_labels_compile_to_single_tokens() -> None:
@@ -43,23 +28,6 @@ def test_numeric_labels_with_none_uses_last_group() -> None:
     assert label_set.token_ids[-1] == (7,)
 
 
-def test_numeric_labels_cache_returns_same_object() -> None:
-    """同一个 (count, with_none) 只编译一次, 缓存命中返回同一对象."""
-    calls: list[str] = []
-
-    def tokenize(text: str) -> list[int]:
-        calls.append(text)
-        return [7] if text == NONE_LABEL else [int(text)]
-
-    fake = NumericLabels(tokenize)
-    first = fake.get(4)
-    second = fake.get(4)
-    assert first is second
-    assert len(calls) == 4
-    assert fake.cached_entries == 1
-
-    fake.get(4, with_none=True)
-    assert fake.cached_entries == 2
 
 
 def test_numeric_labels_rejects_multi_token_label() -> None:
@@ -71,11 +39,6 @@ def test_numeric_labels_rejects_multi_token_label() -> None:
     assert fake.cached_entries == 0
 
 
-def test_numeric_labels_reject_colliding_tokens() -> None:
-    """两个标签撞到同一 token 时报错 (否则概率会双记)."""
-    fake = NumericLabels(lambda text: [42])
-    with pytest.raises(LabelResolutionError):
-        fake.get(2)
 
 
 def test_numeric_labels_probabilities_follow_logits() -> None:

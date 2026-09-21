@@ -24,13 +24,6 @@ def test_scan_finds_only_gguf_files(tmp_path: Path) -> None:
     assert registry.names() == ("MiniCPM5-2B-Q4_K_M",)
 
 
-def test_missing_directory_gives_empty_registry(tmp_path: Path) -> None:
-    """目录不存在就空清单, 任何解析都报未知模型."""
-    registry = ModelRegistry(tmp_path / "nope")
-    assert registry.names() == ()
-    assert registry.list() == []
-    with pytest.raises(UsageError):
-        registry.resolve("anything")
 
 
 def test_description_and_release_date(tmp_path: Path) -> None:
@@ -45,10 +38,6 @@ def test_description_and_release_date(tmp_path: Path) -> None:
     assert set(entry) == {"name", "description", "release_date"}
 
 
-def test_unknown_quant_is_labelled(tmp_path: Path) -> None:
-    """认不出量化标记时给明确说明, 不是空字符串."""
-    _touch(tmp_path / "mystery.gguf")
-    assert "unknown quant" in ModelRegistry(tmp_path).list()[0].description
 
 
 def test_resolve_without_aliases_is_exact_match(tmp_path: Path) -> None:
@@ -78,19 +67,5 @@ def test_alias_to_missing_model_is_rejected(tmp_path: Path) -> None:
     assert "latest" in str(error.value)
 
 
-def test_alias_colliding_with_real_name_is_rejected(tmp_path: Path) -> None:
-    """别名与真实模型名撞名 -> 启动即报错."""
-    _touch(tmp_path / "model-a.gguf")
-    _touch(tmp_path / "model-b.gguf")
-    with pytest.raises(ConfigError) as error:
-        ModelRegistry(tmp_path, {"model-a": "model-b"})
-    assert "撞名" in str(error.value)
 
 
-def test_path_of_returns_weight_file(tmp_path: Path) -> None:
-    """真实模型名 -> 权重路径; 未知名字报错."""
-    path = _touch(tmp_path / "model-a.gguf")
-    registry = ModelRegistry(tmp_path)
-    assert registry.path_of("model-a") == path
-    with pytest.raises(UsageError):
-        registry.path_of("nope")

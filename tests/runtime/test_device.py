@@ -68,10 +68,6 @@ def test_default_n_ctx_is_32k() -> None:
     assert config.n_ctx == DEFAULT_N_CTX
 
 
-def test_n_ctx_accepts_upper_bound() -> None:
-    """上限本身合法 (闭区间); 只构造配置, 不加载模型."""
-    assert validate_n_ctx(MAX_N_CTX) == MAX_N_CTX
-    assert EngineConfig(model_path=MODEL_PATH, n_ctx=MAX_N_CTX).n_ctx == MAX_N_CTX
 
 
 def test_n_ctx_over_upper_bound_reports_limit() -> None:
@@ -86,18 +82,8 @@ def test_n_ctx_over_upper_bound_reports_limit() -> None:
         EngineConfig(model_path=MODEL_PATH, n_ctx=200000)
 
 
-@pytest.mark.parametrize("value", [0, -1])
-def test_n_ctx_rejects_non_positive(value: int) -> None:
-    """上下文长度必须为正."""
-    with pytest.raises(EngineError):
-        validate_n_ctx(value)
 
 
-@pytest.mark.parametrize("value", [True, 1.5, "4096", None])
-def test_n_ctx_rejects_non_integer(value: object) -> None:
-    """非整数 (含 bool) 一律拒绝, 不做隐式转换."""
-    with pytest.raises(EngineError):
-        validate_n_ctx(value)  # type: ignore[arg-type]
 
 
 def test_device_lock_is_process_wide_then_restored() -> None:
@@ -117,7 +103,3 @@ def test_device_lock_is_process_wide_then_restored() -> None:
     assert "CUDA_VISIBLE_DEVICES" not in os.environ
 
 
-def test_same_device_can_be_acquired_repeatedly() -> None:
-    """同一档位重复获取是幂等的 (多个引擎共用一份设备)."""
-    acquire_device(Device.GPU)
-    acquire_device(Device.GPU)

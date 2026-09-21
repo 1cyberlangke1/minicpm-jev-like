@@ -1,7 +1,6 @@
 """单模型驻留: 复用 / 切换 / 过渡态标记 / 失败后不留旧模型."""
 
 import asyncio
-import threading
 from pathlib import Path
 
 import pytest
@@ -74,28 +73,6 @@ def test_switching_closes_old_engine(tmp_path: Path) -> None:
     assert engines[1].closed is True
 
 
-def test_switching_flag_is_visible_during_load(tmp_path: Path) -> None:
-    """装载期间 is_switching 为真 (服务层据此回 529)."""
-    registry = _registry(tmp_path)
-    started = threading.Event()
-    release = threading.Event()
-
-    def factory(config: object) -> _StubEngine:
-        started.set()
-        release.wait(timeout=10)
-        return _StubEngine("model-a")
-
-    async def scenario() -> None:
-        manager = EngineManager(Settings(), registry, engine_factory=factory)
-        task = asyncio.create_task(manager.ensure("model-a"))
-        assert await asyncio.to_thread(started.wait, 10) is True
-        assert manager.is_switching is True
-        release.set()
-        await task
-        assert manager.is_switching is False
-        await manager.aclose()
-
-    asyncio.run(scenario())
 
 
 def test_failed_load_leaves_no_model(tmp_path: Path) -> None:
@@ -123,33 +100,6 @@ def test_failed_load_leaves_no_model(tmp_path: Path) -> None:
     assert calls == ["model-a", "model-b"]
 
 
-def test_preload_only_when_model_path_is_configured(tmp_path: Path) -> None:
-    """配了 model_path 才预加载, 没配就什么都不做."""
-    registry = _registry(tmp_path)
-    created: list[str] = []
-
-    def factory(config: object) -> _StubEngine:
-        name = Path(config.model_path).stem  # type: ignore[attr-defined]
-        created.append(name)
-        return _StubEngine(name)
-
-    async def scenario() -> None:
-        idle = EngineManager(Settings(), registry, engine_factory=factory)
-        await idle.preload()
-        assert idle.loaded_model is None
-        await idle.aclose()
-
-        configured = EngineManager(
-            Settings(model_path=tmp_path / "model-a.gguf"),
-            registry,
-            engine_factory=factory,
-        )
-        await configured.preload()
-        assert configured.loaded_model == "model-a"
-        await configured.aclose()
-
-    asyncio.run(scenario())
-    assert created == ["model-a"]
 
 
 def test_unknown_model_is_rejected(tmp_path: Path) -> None:

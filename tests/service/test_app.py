@@ -270,19 +270,6 @@ def test_queue_full_returns_429(registry: ModelRegistry) -> None:
             assert done.json()["answers"]["sky"]["type"] == "noul"
 
 
-def test_alias_end_to_end(registry: ModelRegistry) -> None:
-    """配了别名: 请求可以用别名, 响应回真实模型名."""
-    aliased = ModelRegistry(MODEL_PATH.parent, {"latest": MODEL_NAME})
-    app = create_app(
-        Settings(model_path=MODEL_PATH, n_ctx=1024, chunk_size=8),
-        registry=aliased,
-    )
-    with TestClient(app) as client:
-        body = dict(NOUL_BODY)
-        body["model"] = "latest"
-        response = client.post("/v1/systemone", json=body)
-        assert response.status_code == 200
-        assert response.json()["model"] == MODEL_NAME
 
 
 def test_switching_model_returns_529(

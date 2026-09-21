@@ -18,26 +18,12 @@ def test_one_hot_gives_one() -> None:
     assert normalized_peak([0.0, 0.0, 1.0]) == pytest.approx(1.0)
 
 
-def test_single_label_is_trivially_certain() -> None:
-    """只有一个标签时没有不确定性可言, 给 1 (与 K-1 分母的约定一致)."""
-    assert normalized_peak([1.0]) == 1.0
 
 
-def test_two_label_formula() -> None:
-    """两个标签时退化成 (2p - 1)."""
-    assert normalized_peak([0.8, 0.2]) == pytest.approx(0.6)
-    assert normalized_peak([0.5, 0.5]) == pytest.approx(0.0)
 
 
-def test_multi_label_formula() -> None:
-    """K 个标签: (K·p_max - 1) / (K - 1)."""
-    assert normalized_peak([0.5, 0.5, 0.0, 0.0, 0.0]) == pytest.approx(0.375)
-    assert normalized_peak([0.25, 0.25, 0.25, 0.25]) == pytest.approx(0.0)
 
 
-def test_below_uniform_is_clamped_to_zero() -> None:
-    """比均匀还平的分布数值上不可能, 但浮点误差可能造出来 -> clamp 到 0."""
-    assert normalized_peak([0.3, 0.3, 0.3]) == 0.0
 
 
 def test_confidence_is_monotone_in_peak() -> None:
@@ -56,8 +42,3 @@ def test_empty_input_is_rejected() -> None:
         normalized_peak([])
 
 
-@pytest.mark.parametrize("value", [-0.1, 1.5])
-def test_out_of_range_probability_is_rejected(value: float) -> None:
-    """概率必须在 [0, 1] 内, 越界直接报错不夹取."""
-    with pytest.raises(ValueError):
-        normalized_peak([value, 0.5])

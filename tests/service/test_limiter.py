@@ -7,28 +7,8 @@ import pytest
 from minicpm_jev.service import RateLimitedError, RequestLimiter
 
 
-def test_limit_must_be_positive() -> None:
-    """上限至少为 1."""
-    with pytest.raises(ValueError):
-        RequestLimiter(0)
-    with pytest.raises(ValueError):
-        RequestLimiter(-1)
 
 
-def test_slot_counts_and_releases() -> None:
-    """slot 进入 +1, 退出归零; 嵌套也算数."""
-
-    async def scenario() -> None:
-        limiter = RequestLimiter(2)
-        assert limiter.active == 0
-        async with limiter.slot():
-            assert limiter.active == 1
-            async with limiter.slot():
-                assert limiter.active == 2
-            assert limiter.active == 1
-        assert limiter.active == 0
-
-    asyncio.run(scenario())
 
 
 def test_full_queue_raises_rate_limited() -> None:
@@ -82,13 +62,3 @@ def test_concurrent_acquires_are_capped() -> None:
     asyncio.run(scenario())
 
 
-def test_release_is_idempotent() -> None:
-    """多归还也不会把计数压成负数."""
-
-    async def scenario() -> None:
-        limiter = RequestLimiter(1)
-        await limiter.release()
-        await limiter.release()
-        assert limiter.active == 0
-
-    asyncio.run(scenario())

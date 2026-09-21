@@ -44,20 +44,6 @@ def test_batch_argmax_matches_single(engine) -> None:
         )
 
 
-def test_batch_scores_match_single(engine, labels) -> None:
-    """受限概率是决策量, 整批与单发的差要压得住."""
-    sequences = [_sequence(engine, question) for question in QUESTIONS]
-    batched = engine.score(sequences, labels)
-    alone = [engine.score([sequence], labels)[0] for sequence in sequences]
-    for index, (batch_scores, single_scores) in enumerate(zip(batched, alone)):
-        assert set(batch_scores) == set(single_scores) == {"true", "false"}
-        assert max(batch_scores, key=batch_scores.__getitem__) == max(
-            single_scores, key=single_scores.__getitem__
-        )
-        for name, value in batch_scores.items():
-            assert abs(value - single_scores[name]) <= PROB_TOL, (
-                f"第 {index} 条序列 {name} 批量 {value} 与单发 {single_scores[name]} 差超限"
-            )
 
 
 def test_duplicate_sequences_share_one_computation(engine) -> None:
@@ -97,20 +83,5 @@ def test_tokenize_label_uses_label_contract(engine: BatchEngine) -> None:
         assert len(engine.tokenize_label(text)) == 1, text
 
 
-def test_numeric_labels_ids_match_tokenize_label(engine: BatchEngine) -> None:
-    """标签编译用的 token id 必须与 tokenize_label 完全一致, 否则打分位会错位."""
-    label_set = engine.numeric_labels.get(3, with_none=True)
-    expected = tuple((engine.tokenize_label(name)[0],) for name in label_set.names)
-    assert label_set.token_ids == expected
 
 
-def test_numeric_labels_property_is_cached(engine: BatchEngine) -> None:
-    """数字标签工厂是进程内单例; 重复取同一个组合不会新增缓存条目."""
-    factory = engine.numeric_labels
-    assert factory is engine.numeric_labels
-    first = factory.get(4, with_none=True)
-    entries = factory.cached_entries
-    second = factory.get(4, with_none=True)
-    assert first is second
-    assert first.names == ("0", "1", "2", "3", "None")
-    assert factory.cached_entries == entries

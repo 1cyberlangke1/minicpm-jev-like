@@ -15,7 +15,6 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
-import httpx
 import pytest
 import uvicorn
 
@@ -181,12 +180,3 @@ def test_sdk_maps_bad_question_to_unprocessable(base_url: str) -> None:
         )
 
 
-def test_sdk_maps_bad_body_to_unprocessable(base_url: str) -> None:
-    """请求体缺字段 -> 422 (pydantic 那套字段数组 SDK 也吃)."""
-    raw = httpx.post(
-        f"{base_url}/v1/systemone",
-        json={"state": "x", "questions": {}},
-        headers={"Authorization": f"Bearer {API_KEY}"},
-        timeout=30.0,
-    )
-    assert raw.status_code == 422

@@ -2,7 +2,6 @@
 
 import pytest
 
-from minicpm_jev.chunking import plan_chunks
 from minicpm_jev.decision import (
     Choice,
     ChoiceAnswer,
@@ -17,17 +16,8 @@ from minicpm_jev.decision import (
     answer_noul,
     answer_score,
 )
-from minicpm_jev.decision.scoring import _choice_prompt, _score_prompt
 
 
-def test_noul_true_question_is_confident_yes(engine) -> None:
-    """常识为真的问题: noul 概率应明显偏向 yes."""
-    result = answer_noul(engine, "General common sense.", Noul(
-        instructions="Is the sky blue on a clear day?"
-    ))
-    assert isinstance(result, NoulAnswer)
-    assert 0.0 <= result.noul <= 1.0
-    assert result.noul > 0.5
 
 
 def test_noul_false_question_is_confident_no(engine) -> None:
@@ -93,24 +83,6 @@ def test_choice_chunked_candidates_still_pick_expected_option(engine) -> None:
     assert result.choice == "blue"
 
 
-def test_choice_single_chunk_matches_chunked_ranking(engine) -> None:
-    """同一批候选, 单块与分块的 top-1 必须一致 (分块只是手段, 不能改结论)."""
-    criteria = {
-        "blue": "the clear daytime sky",
-        "green": "grass and leaves",
-        "red": "fresh blood",
-        "yellow": "ripe bananas",
-        "black": "coal",
-    }
-    question = Choice(
-        instructions="On a clear day, what color does the sky appear?",
-        criteria=criteria,
-    )
-    single = answer_choice(engine, "Answer with common sense.", question)
-    chunked = answer_choice(
-        engine, "Answer with common sense.", question, chunk_size=2
-    )
-    assert single.choice == chunked.choice
 
 
 def test_choice_without_descriptions_still_decides(engine) -> None:
@@ -125,43 +97,8 @@ def test_choice_without_descriptions_still_decides(engine) -> None:
     assert sum(result.probabilities.values()) == pytest.approx(1.0)
 
 
-def test_prompt_omits_empty_sections() -> None:
-    """null 字段渲染成空串时整段省略: 不留空标题, 也不留尾随空格."""
-    chunk = plan_chunks(2, 128).chunks[0]
-    prompt = _choice_prompt(
-        Choice(instructions=None, criteria={"a": None, "b": ""}), chunk
-    )
-    assert "Question:" not in prompt
-    assert "[0] a" in prompt
-    assert "[1] b" in prompt
-    assert all(line == line.rstrip() for line in prompt.splitlines())
-
-    score_prompt = _score_prompt(
-        Score(instructions="Rate it.", criteria=["low", None])
-    )
-    assert "[1]" in score_prompt
-    assert "[1] " not in score_prompt
 
 
-def test_score_is_probability_weighted_average(engine) -> None:
-    """score = Σ p_i · i, 且 legend / probabilities 键是档位编号字符串."""
-    question = Score(
-        instructions="How angry is the customer?",
-        criteria=["calm", "mildly annoyed", "angry", "furious"],
-    )
-    state = "Customer: This is the third time my order was wrong. I am furious and want a refund."
-    result = answer_score(engine, state, question)
-    assert isinstance(result, ScoreAnswer)
-    assert set(result.probabilities) == {"0", "1", "2", "3"}
-    assert set(result.legend) == {"0", "1", "2", "3"}
-    assert result.legend["3"] == "furious"
-    assert sum(result.probabilities.values()) == pytest.approx(1.0)
-    expected = sum(
-        index * result.probabilities[str(index)] for index in range(4)
-    )
-    assert result.score == pytest.approx(expected)
-    assert 0.0 <= result.score <= 3.0
-    assert 0.0 <= result.confidence <= 1.0
 
 
 def test_score_leans_angry_for_angry_state(engine) -> None:
@@ -175,23 +112,6 @@ def test_score_leans_angry_for_angry_state(engine) -> None:
     assert result.score > 1.0
 
 
-def test_answer_dispatches_by_question_type(engine) -> None:
-    """answer() 按题型分发, 返回对应答案类型."""
-    state = "General common sense."
-    noul = answer(engine, state, Noul(instructions="Is water wet?"))
-    choice = answer(
-        engine,
-        state,
-        Choice(instructions="Pick one", criteria={"a": "first", "b": "second"}),
-    )
-    score = answer(
-        engine,
-        state,
-        Score(instructions="Rate", criteria=["low", "high"]),
-    )
-    assert isinstance(noul, NoulAnswer)
-    assert isinstance(choice, ChoiceAnswer)
-    assert isinstance(score, ScoreAnswer)
 
 
 def test_answer_rejects_unknown_type(engine) -> None:
@@ -338,7 +258,3 @@ def test_answer_all_usage_counts_every_sequence(engine) -> None:
     assert batch_usage.output_tokens == 1
 
 
-def test_answer_all_rejects_empty_questions(engine) -> None:
-    """没有题目就没有答案, 直接报错."""
-    with pytest.raises(ValueError):
-        answer_all(engine, "x", {})

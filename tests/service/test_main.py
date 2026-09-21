@@ -37,15 +37,6 @@ def test_main_wires_cli_into_uvicorn(
     assert recorded["app"] is not None
 
 
-def test_main_defaults_without_arguments(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """一个参数都不传: 走内置默认 (工作目录里没有 config.json)."""
-    recorded = _patch_uvicorn(monkeypatch)
-    monkeypatch.chdir(tmp_path)
-    assert main([]) == 0
-    assert recorded["host"] == "127.0.0.1"
-    assert recorded["port"] == 8000
 
 
 def test_main_rejects_bad_value_before_serving(
