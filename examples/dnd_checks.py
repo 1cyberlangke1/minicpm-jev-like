@@ -56,22 +56,22 @@ def main() -> int:
     with BatchEngine(EngineConfig(model_path=MODEL, n_ctx=4096)) as engine:
         hits = 0
         for name, question, expected in CHECKS:
-            answer = answer_noul(engine, "", Noul(instructions=question))
-            got = answer.noul >= 0.5
+            verdict = answer_noul(engine, "", Noul(instructions=question))
+            got = verdict.noul >= 0.5
             hits += int(got == expected)
             print(
                 f"{name:<10} 模型={'yes' if got else 'no ':<3} "
                 f"金标={'yes' if expected else 'no ':<3} "
-                f"P(yes)={answer.noul:.3f}"
+                f"P(yes)={verdict.noul:.3f}"
             )
         print(f"判定 {hits}/{len(CHECKS)}")
-        for name, question, criteria, expected in PICKS:
-            answer = answer_choice(
+        for name, question, criteria, want in PICKS:
+            pick = answer_choice(
                 engine, "", Choice(instructions=question, criteria=criteria)
             )
             print(
-                f"{name:<12} 模型={answer.choice:<8} 金标={expected:<8} "
-                f"confidence={answer.confidence:.3f}"
+                f"{name:<12} 模型={pick.choice:<8} 金标={want:<8} "
+                f"confidence={pick.confidence:.3f}"
             )
     return 0
 

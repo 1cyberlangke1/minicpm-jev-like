@@ -23,6 +23,7 @@ import random
 import sys
 import time
 from collections import deque
+from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,11 @@ ASK = (
 )
 WALL = "#"
 
+#: 迷宫示例内部的几个形状: 字符网格 / 一格坐标 / 逐方向概率表
+Grid = list[list[str]]
+Cell = tuple[int, int]
+Probs = Mapping[str, float]
+
 #: 光标回左上角 (不清屏)
 HOME = "\033[H"
 #: 整屏清空: 只在第一帧用一次, 抹掉启动前终端里残留的内容
@@ -104,7 +110,7 @@ def generate(size: int, rng: random.Random) -> list[list[str]]:
     return grid
 
 
-def carve_path(grid, start, goal) -> None:
+def carve_path(grid: Grid, start: Cell, goal: Cell) -> None:
     """S 到 G 不通时, 沿破墙最少的路线把墙打通.
 
     输入: grid -- 网格 (原地改); start / goal -- 起点与终点坐标;
@@ -119,6 +125,9 @@ def carve_path(grid, start, goal) -> None:
     queue = deque([start])
     while queue:
         row, column = queue.popleft()
+        here = distance[row][column]
+        # 只有已经定下距离的格才会被入队, 这里只是把 Optional 收窄成 int
+        assert here is not None
         for delta_row, delta_column in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             next_row = row + delta_row
             next_column = column + delta_column
@@ -126,22 +135,24 @@ def carve_path(grid, start, goal) -> None:
                 continue
             cost = 1 if grid[next_row][next_column] == WALL else 0
             known = distance[next_row][next_column]
-            if known is not None and known <= distance[row][column] + cost:
+            if known is not None and known <= here + cost:
                 continue
-            distance[next_row][next_column] = distance[row][column] + cost
+            distance[next_row][next_column] = here + cost
             previous[next_row][next_column] = (row, column)
             if cost == 0:
                 queue.appendleft((next_row, next_column))
             else:
                 queue.append((next_row, next_column))
     row, column = goal
-    while previous[row][column] is not None:
+    parent = previous[row][column]
+    while parent is not None:
         grid[row][column] = "."
-        row, column = previous[row][column]
+        row, column = parent
+        parent = previous[row][column]
     grid[start[0]][start[1]] = "."
 
 
-def shortest_steps(grid, start, goal) -> int:
+def shortest_steps(grid: Grid, start: Cell, goal: Cell) -> int:
     """BFS 最短步数. 输入: 网格 + 起点终点; 输出: 步数 (到不了返回 -1)."""
     queue = deque([(start, 0)])
     seen = {start}
@@ -161,21 +172,21 @@ def shortest_steps(grid, start, goal) -> int:
     return -1
 
 
-def neighbors(grid, row: int, column: int) -> dict[str, str]:
+def neighbors(grid: Grid, row: int, column: int) -> dict[str, str]:
     """四邻探测. 输入: 网格 + 坐标; 输出: 方向 -> 方向语义 + 那一格是什么.
 
     描述写成 "row - 1: '#' wall" 这种形式: "row - 1" 是把方向名和字符网格对上的
     那座桥 (实测去掉后五个 seed 全败), 而坐标 "(5,4)" 是多余的第三份信息
     (地图上已经有了), 留着只是噪声。
     """
-    found = {}
+    found: dict[str, str] = {}
     for name, (delta_row, delta_column) in DELTAS.items():
         char = grid[row + delta_row][column + delta_column]
         found[name] = f"{HINTS[name]}: '{char}' {CHAR_NAMES[char]}"
     return found
 
 
-def render_map(board, row: int, column: int, *, color: bool = False) -> str:
+def render_map(board: Grid, row: int, column: int, *, color: bool = False) -> str:
     """地图画成带边框的方块, 当前格显示成 '@'.
 
     输入: board -- 字符网格; row / column -- 当前位置; color -- 是否上色;
@@ -198,7 +209,7 @@ def render_map(board, row: int, column: int, *, color: bool = False) -> str:
     return "\n".join(lines)
 
 
-def build_state(board, row: int, column: int, history) -> str:
+def build_state(board: Grid, row: int, column: int, history: list[str]) -> str:
     """拼给模型的题面背景 (走 system 位).
 
     输入: board -- 当前网格 (含已走过的 '*'); row / column -- 当前位置;
@@ -215,7 +226,7 @@ def build_state(board, row: int, column: int, history) -> str:
     )
 
 
-def render_probe(probabilities) -> str:
+def render_probe(probabilities: Probs) -> str:
     """四个方向选项的概率进度条 + 数字, 排成两行: 上/下 一行, 左/右 一行.
 
     本步概率最高的那一格整格标绿, 一眼能看出模型选了哪个方向。
@@ -251,11 +262,11 @@ def paint(text: str, *, clear: bool = False) -> None:
 
 
 def draw(
-    board,
+    board: Grid,
     row: int,
     column: int,
-    probabilities,
-    trail,
+    probabilities: Probs,
+    trail: list[str],
     note: str,
     model: str,
     *,
@@ -276,7 +287,14 @@ def draw(
     )
 
 
-def walk(engine: BatchEngine, grid, start, goal, limit: int, model: str = ""):
+def walk(
+    engine: BatchEngine,
+    grid: Grid,
+    start: Cell,
+    goal: Cell,
+    limit: int,
+    model: str = "",
+) -> tuple[bool, int]:
     """走迷宫, 每步就地刷新. 输出: (是否通关, 步数)."""
     board = [list(line) for line in grid]
     row, column = start
@@ -285,7 +303,7 @@ def walk(engine: BatchEngine, grid, start, goal, limit: int, model: str = ""):
     trail: list[str] = []
     drawn = False
 
-    def show(probabilities, note: str) -> None:
+    def show(probabilities: Probs, note: str) -> None:
         """画一帧: 第一帧整屏清一次, 之后都是覆盖写."""
         nonlocal drawn
         draw(

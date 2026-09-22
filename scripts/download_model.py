@@ -29,6 +29,7 @@ import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TypedDict
 
 import requests
 from huggingface_hub import HfApi, hf_hub_download
@@ -127,11 +128,19 @@ def download_multipart(repo_id: str, name: str, dest: Path, parts: int,
     return final
 
 
-def list_gguf_files(repo_id: str) -> list[dict]:
+class GgufFile(TypedDict):
+    """仓库里一个 GGUF 文件的摘要：路径 / 量化档 / 是否分片。"""
+
+    rfilename: str
+    quant: str
+    shard: bool
+
+
+def list_gguf_files(repo_id: str) -> list[GgufFile]:
     """拉仓库文件清单，只保留 .gguf。输出 [{rfilename, quant, shard}] 字典列表。"""
     api = HfApi()
     info = api.model_info(repo_id, files_metadata=False)
-    entries = []
+    entries: list[GgufFile] = []
     for sib in info.siblings or []:
         name = sib.rfilename
         if not name.lower().endswith(".gguf"):

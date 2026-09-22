@@ -2,15 +2,23 @@
 
 import asyncio
 from pathlib import Path
+from typing import Never
 
 import pytest
 
 from minicpm_jev.config import Settings
+from minicpm_jev.runtime import EngineConfig
 from minicpm_jev.service import EngineManager, ModelRegistry, UsageError
 
 
 class _StubEngine:
-    """引擎替身: 管理器只用 close 这一个接口."""
+    """引擎替身: 只把 close 做实, 打分面一律显式炸掉.
+
+    输入: name -- 模型名;
+    输出: close 置位 closed, 其余引擎成员抛 AssertionError;
+    预期: 服务层的引擎契约是「能关 + 能打分」, 替身必须整份实现; 管理器一旦越界
+          用到打分接口, 用例直接失败, 而不是拿到 None 静默走通。
+    """
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -18,6 +26,19 @@ class _StubEngine:
 
     def close(self) -> None:
         self.closed = True
+
+    def _unused(self, *args: object, **kwargs: object) -> Never:
+        """任何引擎成员的调用都当「测试被越界使用」处理.
+
+        返回类型写成 Never (永不返回), 因此它可以顶替协议里任意签名的成员;
+        赋值成 numeric_labels / score 等名字即等于「这些成员被调到了就炸」。
+        """
+        raise AssertionError("生命周期测试不该用到打分接口")
+
+    numeric_labels = property(_unused)
+    tokenize_label = _unused
+    render_tokens = _unused
+    score = _unused
 
 
 def _registry(tmp_path: Path) -> ModelRegistry:
@@ -32,8 +53,8 @@ def test_same_model_is_loaded_once(tmp_path: Path) -> None:
     created: list[str] = []
     registry = _registry(tmp_path)
 
-    def factory(config: object) -> _StubEngine:
-        name = Path(config.model_path).stem  # type: ignore[attr-defined]
+    def factory(config: EngineConfig) -> _StubEngine:
+        name = Path(config.model_path).stem
         created.append(name)
         return _StubEngine(name)
 
@@ -54,8 +75,8 @@ def test_switching_closes_old_engine(tmp_path: Path) -> None:
     engines: list[_StubEngine] = []
     registry = _registry(tmp_path)
 
-    def factory(config: object) -> _StubEngine:
-        name = Path(config.model_path).stem  # type: ignore[attr-defined]
+    def factory(config: EngineConfig) -> _StubEngine:
+        name = Path(config.model_path).stem
         engine = _StubEngine(name)
         engines.append(engine)
         return engine
@@ -80,8 +101,8 @@ def test_failed_load_leaves_no_model(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
     calls: list[str] = []
 
-    def factory(config: object) -> _StubEngine:
-        name = Path(config.model_path).stem  # type: ignore[attr-defined]
+    def factory(config: EngineConfig) -> _StubEngine:
+        name = Path(config.model_path).stem
         calls.append(name)
         if name == "model-b":
             raise RuntimeError("boom")

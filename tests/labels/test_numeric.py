@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from minicpm_jev import BatchEngine
 from minicpm_jev.labels import NONE_LABEL, LabelResolutionError, NumericLabels
 
 
@@ -52,7 +53,7 @@ def test_numeric_labels_probabilities_follow_logits() -> None:
     assert sum(result.values()) == pytest.approx(1.0)
 
 
-def test_numeric_labels_accepts_real_tokenizer(engine) -> None:
+def test_numeric_labels_accepts_real_tokenizer(engine: BatchEngine) -> None:
     """真模型词表: 0~127 与 None 全部单 token (实测约束, 不能靠假设)."""
     factory = NumericLabels(lambda text: engine.tokenize(text, add_bos=False))
     label_set = factory.get(128, with_none=True)

@@ -27,13 +27,13 @@ def _sequence(engine: BatchEngine, question: str) -> list[int]:
 
 
 @pytest.fixture(scope="module")
-def labels(engine) -> LabelSet:
+def labels(engine: BatchEngine) -> LabelSet:
     return resolve_labels(
         lambda text: engine.tokenize(text, add_bos=False), BOOL_LABEL_SPECS
     )
 
 
-def test_batch_argmax_matches_single(engine) -> None:
+def test_batch_argmax_matches_single(engine: BatchEngine) -> None:
     """整批 decode 与逐条单发的 argmax 必须一致."""
     sequences = [_sequence(engine, question) for question in QUESTIONS]
     batched = engine.decision_logits(sequences)
@@ -46,7 +46,7 @@ def test_batch_argmax_matches_single(engine) -> None:
 
 
 
-def test_duplicate_sequences_share_one_computation(engine) -> None:
+def test_duplicate_sequences_share_one_computation(engine: BatchEngine) -> None:
     """完全相同的序列按哈希去重, 返回逐位相同的结果."""
     sequence = _sequence(engine, "1+1=2 吗?")
     logits = engine.decision_logits([sequence, sequence, sequence])
@@ -55,7 +55,7 @@ def test_duplicate_sequences_share_one_computation(engine) -> None:
     assert np.array_equal(logits[1], logits[2])
 
 
-def test_chunked_decode_matches_large_batch(engine, labels) -> None:
+def test_chunked_decode_matches_large_batch(engine: BatchEngine, labels: LabelSet) -> None:
     """把 n_batch 压到 16 强制分块, 决策量仍要与逐条单发一致."""
     sequences = [_sequence(engine, question) for question in QUESTIONS[:3]]
     reference = [engine.score([sequence], labels)[0] for sequence in sequences]

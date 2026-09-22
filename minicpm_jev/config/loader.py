@@ -110,6 +110,8 @@ def load_settings(
     输出: Settings;
     预期: 显式给的路径一定要存在且合法; 没给且默认文件不存在时安静走默认值。
     """
+    # 没给路径且默认文件不存在时 config 就是 None, 类型上要先把这条支路写全
+    config: dict[str, Any] | None
     if config_path is not None:
         config = load_config_file(Path(config_path))
     else:

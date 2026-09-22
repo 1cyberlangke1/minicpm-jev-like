@@ -1,6 +1,10 @@
 """三原语打分: 真模型端到端 (含分块候选)."""
 
+from collections.abc import Sequence
+
 import pytest
+
+from minicpm_jev import BatchEngine, LabelSet, Question
 
 from minicpm_jev.decision import (
     Choice,
@@ -19,7 +23,7 @@ from minicpm_jev.decision import (
 
 
 
-def test_noul_false_question_is_confident_no(engine) -> None:
+def test_noul_false_question_is_confident_no(engine: BatchEngine) -> None:
     """常识为假的问题: noul 概率应明显偏向 no."""
     result = answer_noul(engine, "General common sense.", Noul(
         instructions="Is fire cold to the touch?"
@@ -27,7 +31,7 @@ def test_noul_false_question_is_confident_no(engine) -> None:
     assert result.noul < 0.5
 
 
-def test_noul_water_is_wet(engine) -> None:
+def test_noul_water_is_wet(engine: BatchEngine) -> None:
     """水是湿的: 单发路径下 noul 概率偏向 yes (只测单发, 不跨批比差)."""
     result = answer_noul(
         engine, "General common sense.", Noul(instructions="Is water wet?")
@@ -36,7 +40,7 @@ def test_noul_water_is_wet(engine) -> None:
     assert result.noul > 0.5
 
 
-def test_choice_single_chunk_picks_expected_option(engine) -> None:
+def test_choice_single_chunk_picks_expected_option(engine: BatchEngine) -> None:
     """单块 (3 个候选): 概率和为 1, 命中语义正确项, 置信度在 [0, 1]."""
     question = Choice(
         instructions="On a clear day, what color does the sky appear?",
@@ -55,7 +59,7 @@ def test_choice_single_chunk_picks_expected_option(engine) -> None:
     assert result.probabilities["blue"] == max(result.probabilities.values())
 
 
-def test_choice_chunked_candidates_still_pick_expected_option(engine) -> None:
+def test_choice_chunked_candidates_still_pick_expected_option(engine: BatchEngine) -> None:
     """10 个候选按 chunk_size=4 分块 (3 块, 每块带 None): 仍命中正确项且概率和为 1."""
     criteria = {
         "blue": "the clear daytime sky",
@@ -84,7 +88,7 @@ def test_choice_chunked_candidates_still_pick_expected_option(engine) -> None:
 
 
 
-def test_choice_without_descriptions_still_decides(engine) -> None:
+def test_choice_without_descriptions_still_decides(engine: BatchEngine) -> None:
     """官方允许 criteria 的值为 null (选项只有名字): 没描述也要能选出正确项."""
     question = Choice(
         instructions="Which animal says meow?",
@@ -100,7 +104,7 @@ def test_choice_without_descriptions_still_decides(engine) -> None:
 
 
 
-def test_score_leans_angry_for_angry_state(engine) -> None:
+def test_score_leans_angry_for_angry_state(engine: BatchEngine) -> None:
     """明显愤怒的工单不该落在最平静那档."""
     question = Score(
         instructions="How angry is the customer?",
@@ -113,13 +117,13 @@ def test_score_leans_angry_for_angry_state(engine) -> None:
 
 
 
-def test_answer_rejects_unknown_type(engine) -> None:
+def test_answer_rejects_unknown_type(engine: BatchEngine) -> None:
     """非三原语对象直接 TypeError, 不静默返回空答案."""
     with pytest.raises(TypeError):
         answer(engine, "x", "not a question")  # type: ignore[arg-type]
 
 
-def _mixed_questions() -> dict:
+def _mixed_questions() -> dict[str, Question]:
     """三原语各一道, 用来验批处理路径."""
     return {
         "urgent": Noul(instructions="Is this message urgent?"),
@@ -134,12 +138,15 @@ def _mixed_questions() -> dict:
     }
 
 
-def test_answer_all_calls_engine_once(engine, monkeypatch) -> None:
+def test_answer_all_calls_engine_once(engine: BatchEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """一次请求里的多个问题只准调一次 engine.score (同批并行 prefill)."""
     calls: list[int] = []
     original = engine.score
 
-    def spy(sequences, labels):
+    def spy(
+        sequences: Sequence[Sequence[int]],
+        labels: LabelSet | Sequence[LabelSet],
+    ) -> list[dict[str, float]]:
         calls.append(len(sequences))
         return original(sequences, labels)
 
@@ -155,7 +162,7 @@ def test_answer_all_calls_engine_once(engine, monkeypatch) -> None:
     assert calls[0] == 3
 
 
-def test_every_request_field_reaches_the_model(engine, monkeypatch) -> None:
+def test_every_request_field_reaches_the_model(engine: BatchEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """回归: state / instructions / 选项名与描述 / 档位 / 判定标准都要真的进 prompt.
 
     之前 choice 整段漏掉 instructions (问句没进上下文), 只断言「选出正确项」是发现
@@ -164,7 +171,10 @@ def test_every_request_field_reaches_the_model(engine, monkeypatch) -> None:
     seen: list[str] = []
     original = engine.score
 
-    def spy(sequences, labels):
+    def spy(
+        sequences: Sequence[Sequence[int]],
+        labels: LabelSet | Sequence[LabelSet],
+    ) -> list[dict[str, float]]:
         seen.extend(
             engine._model.detokenize(list(sequence)).decode("utf-8", "replace")
             for sequence in sequences
@@ -239,7 +249,7 @@ def test_every_request_field_reaches_the_model(engine, monkeypatch) -> None:
         assert marker in seen[-1], f"score 的 {marker} 没进 prompt"
 
 
-def test_answer_all_usage_counts_every_sequence(engine) -> None:
+def test_answer_all_usage_counts_every_sequence(engine: BatchEngine) -> None:
     """usage 按官方语义统计「去重前全部序列的 token 数」."""
     state = "General common sense."
     questions = _mixed_questions()

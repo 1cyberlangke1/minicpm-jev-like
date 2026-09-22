@@ -25,6 +25,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import llama_cpp
 import numpy as np
@@ -34,9 +35,40 @@ from ..labels import LabelSet, NumericLabels
 from ..template import get_chat_template, render_chat
 from .device import DEFAULT_N_CTX, Device, EngineError, acquire_device, validate_n_ctx
 
-__all__ = ["BatchEngine", "EngineConfig"]
+__all__ = ["BatchEngine", "EngineConfig", "ScoringEngine"]
 
 Message = Mapping[str, str]
+
+
+class ScoringEngine(Protocol):
+    """决策层真正用到的引擎接口 (只依赖协议, 不绑死 ``BatchEngine``).
+
+    输入/输出: 与 ``BatchEngine`` 上同名成员一致;
+    预期: 引擎服务层可以传包装对象、测试可以传假引擎, 只要这四项对得上就合法;
+          新增成员要同时想清楚是不是决策层真用得到, 别把协议长成类的影子。
+    """
+
+    @property
+    def numeric_labels(self) -> NumericLabels: ...
+
+    def tokenize_label(self, text: str) -> list[int]: ...
+
+    def render_tokens(
+        self,
+        messages: Sequence[Message],
+        *,
+        add_assistant: bool = True,
+        assistant_prefix: str = "",
+    ) -> list[int]: ...
+
+    def score(
+        self,
+        sequences: Sequence[Sequence[int]],
+        labels: LabelSet | Sequence[LabelSet],
+        *,
+        think_tokens: int = 0,
+        closure: str = "</think>\n[",
+    ) -> list[dict[str, float]]: ...
 
 
 @dataclass(frozen=True)
@@ -181,9 +213,10 @@ class BatchEngine:
         if self._closed:
             return
         self._closed = True
-        self._batch.close()
-        self._context.close()
-        self._model.close()
+        # llama_cpp._internals 的析构方法没带注解, 只能逐个放行 (不是我们的函数缺标注)
+        self._batch.close()  # type: ignore[no-untyped-call]
+        self._context.close()  # type: ignore[no-untyped-call]
+        self._model.close()  # type: ignore[no-untyped-call]
 
     def __enter__(self) -> "BatchEngine":
         return self
@@ -303,40 +336,45 @@ class BatchEngine:
 
         if shared_prefix > 0:
             self._eval_shared_prefix(unique_sequences, shared_prefix, collected)
-            return [collected[seq_index] for seq_index in mapping]  # type: ignore[index]
-
-        index = 0
-        while index < len(unique_sequences):
-            tokens = unique_sequences[index]
-            if len(tokens) > n_batch:
-                # 单条就超过 n_batch: 没有并行余地, 退回 set_batch 分块
-                collected[index] = self._eval_chunked_sequence(tokens)
-                index += 1
-                continue
-            self._batch.reset()
-            packed: list[tuple[int, int]] = []
-            filled = 0
+        else:
+            index = 0
             while index < len(unique_sequences):
-                candidate = unique_sequences[index]
-                if len(candidate) > n_batch or filled + len(candidate) > n_batch:
-                    break
-                first_index = self._batch.n_tokens()
-                # 库自己填位置与 seq_id, 顺手把末位 logits 打开
-                self._batch.add_sequence(candidate, index, False)
-                packed.append((index, first_index + len(candidate) - 1))
-                filled += len(candidate)
-                index += 1
-                if self._config.device is Device.CPU:
-                    # CPU 档不做多序列批: 一次只喂一条
-                    break
-            self._context.decode(self._batch)
-            for target, batch_index in packed:
-                collected[target] = _read_logits(self._context, batch_index, n_vocab)
+                tokens = unique_sequences[index]
+                if len(tokens) > n_batch:
+                    # 单条就超过 n_batch: 没有并行余地, 退回 set_batch 分块
+                    collected[index] = self._eval_chunked_sequence(tokens)
+                    index += 1
+                    continue
+                self._batch.reset()  # type: ignore[no-untyped-call]
+                packed: list[tuple[int, int]] = []
+                filled = 0
+                while index < len(unique_sequences):
+                    candidate = unique_sequences[index]
+                    if len(candidate) > n_batch or filled + len(candidate) > n_batch:
+                        break
+                    first_index = self._batch.n_tokens()
+                    # 库自己填位置与 seq_id, 顺手把末位 logits 打开
+                    self._batch.add_sequence(candidate, index, False)
+                    packed.append((index, first_index + len(candidate) - 1))
+                    filled += len(candidate)
+                    index += 1
+                    if self._config.device is Device.CPU:
+                        # CPU 档不做多序列批: 一次只喂一条
+                        break
+                self._context.decode(self._batch)
+                for target, batch_index in packed:
+                    collected[target] = _read_logits(
+                        self._context, batch_index, n_vocab
+                    )
 
-        missing = [seq_index for seq_index, value in enumerate(collected) if value is None]
-        if missing:
-            raise EngineError(f"no decision logits for sequences {missing}")
-        return [collected[seq_index] for seq_index in mapping]  # type: ignore[index]
+        # 两条路径都必须把每条序列的决策位写满; 有空洞就是下标映射错了,
+        # 这里顺手把 Optional 摘掉, 绝不把 None 交给调用方去算概率。
+        scored: list[np.ndarray] = []
+        for seq_index, value in enumerate(collected):
+            if value is None:
+                raise EngineError(f"no decision logits for sequence {seq_index}")
+            scored.append(value)
+        return [scored[seq_index] for seq_index in mapping]
 
     def _eval_shared_prefix(
         self,
@@ -448,7 +486,7 @@ class BatchEngine:
         start = 0
         while start < len(tokens):
             chunk = list(tokens[start : start + n_batch])
-            self._batch.reset()
+            self._batch.reset()  # type: ignore[no-untyped-call]
             self._batch.set_batch(chunk, start, False)
             self._context.decode(self._batch)
             start += len(chunk)

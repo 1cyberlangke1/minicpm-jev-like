@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import uvicorn
@@ -21,12 +22,17 @@ import uvicorn
 from minicpm_jev.config import Settings
 from minicpm_jev.service import ModelRegistry, create_app
 
+if TYPE_CHECKING:  # pragma: no cover - 只给静态检查看
+    # 运行时靠下面的 importorskip 兜「没装就整体 skip」; 但 ``TypeSafeClient =
+    # typesafe_sdk.TypeSafeClient`` 这种赋值在 mypy 眼里是变量不是类型名, 所以
+    # 标注要用的真身单独从包里直接 import (SDK 自带 py.typed)。
+    from typesafe_sdk import TypeSafeClient
+
 typesafe_sdk = pytest.importorskip("typesafe_sdk")
 
 Choice = typesafe_sdk.Choice
 Noul = typesafe_sdk.Noul
 Score = typesafe_sdk.Score
-TypeSafeClient = typesafe_sdk.TypeSafeClient
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = ROOT / "weights" / "MiniCPM5-2B-Q4_K_M.gguf"
@@ -78,9 +84,19 @@ def base_url() -> Iterator[str]:
         thread.join(timeout=60)
 
 
-def _client(url: str, key: str = API_KEY) -> object:
-    """造一个指向本地服务的官方客户端."""
-    return TypeSafeClient(api_key=key, base_url=url, timeout=120.0)
+def _client(url: str, key: str = API_KEY) -> TypeSafeClient:
+    """造一个指向本地服务的官方客户端.
+
+    输入: url -- 本地服务地址; key -- 鉴权 key;
+    输出: 官方 SDK 客户端;
+    预期: 返回类型用 TYPE_CHECKING 里 import 的真身 (原来那个模块级别名在 mypy
+          眼里只是变量, 当不了类型), 这样 ``.models`` / ``.system_one`` 才看得见。
+          importorskip 的返回值是 Any, 所以先落到带标注的局部变量再交出去。
+    """
+    client: TypeSafeClient = typesafe_sdk.TypeSafeClient(
+        api_key=key, base_url=url, timeout=120.0
+    )
+    return client
 
 
 def test_sdk_lists_our_models(base_url: str) -> None:
@@ -106,7 +122,10 @@ def test_sdk_parses_noul(base_url: str) -> None:
     assert answer.noul > 0.5
     assert response.model == MODEL_NAME
     assert response.usage.output_tokens == 1
-    assert response.usage.input_tokens > 0
+    # SDK 把 usage 的两个计数字段声明成 Optional, 先确认服务端真的填了再比大小
+    input_tokens = response.usage.input_tokens
+    assert input_tokens is not None
+    assert input_tokens > 0
 
 
 def test_sdk_parses_choice(base_url: str) -> None:

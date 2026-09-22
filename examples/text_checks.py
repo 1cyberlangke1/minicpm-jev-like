@@ -25,7 +25,9 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -60,7 +62,12 @@ PRIORITY_LEVELS = [
 ]
 
 # (任务名, 题型, 问题, 候选/档位, [(输入, 金标)])
-TASKS = (
+# 金标随题型变: noul 是 bool, choice 是选项名, score 是档位下标
+Gold = bool | str | int
+Task = tuple[
+    str, str, str, "Mapping[str, Any] | Sequence[str]", tuple[tuple[str, Gold], ...]
+]
+TASKS: tuple[Task, ...] = (
     (
         "垃圾邮件/钓鱼",
         "noul",
@@ -126,7 +133,12 @@ TASKS = (
 )
 
 
-def run_noul(engine: BatchEngine, question: str, criteria, text: str):
+def run_noul(
+    engine: BatchEngine,
+    question: str,
+    criteria: Mapping[str, Any] | None,
+    text: str,
+) -> tuple[bool, float]:
     """是/否题. 输入: 引擎 + 问题 + 正反释义 + 文本; 输出: (判定, P(yes))."""
     answer = answer_noul(
         engine, text, Noul(instructions=question, criteria=criteria)
@@ -134,7 +146,12 @@ def run_noul(engine: BatchEngine, question: str, criteria, text: str):
     return answer.noul >= 0.5, answer.noul
 
 
-def run_choice(engine: BatchEngine, question: str, criteria, text: str):
+def run_choice(
+    engine: BatchEngine,
+    question: str,
+    criteria: Mapping[str, Any],
+    text: str,
+) -> tuple[str, float]:
     """选择题. 输入: 引擎 + 问题 + 选项 + 文本; 输出: (选项名, 置信度)."""
     answer = answer_choice(
         engine, text, Choice(instructions=question, criteria=criteria)
@@ -142,7 +159,12 @@ def run_choice(engine: BatchEngine, question: str, criteria, text: str):
     return answer.choice, answer.confidence
 
 
-def run_score(engine: BatchEngine, question: str, levels, text: str):
+def run_score(
+    engine: BatchEngine,
+    question: str,
+    levels: Sequence[str],
+    text: str,
+) -> tuple[int, float, float]:
     """档位题. 输入: 引擎 + 问题 + 档位 + 文本; 输出: (档位下标, 置信度, 加权分)."""
     answer = answer_score(
         engine, text, Score(instructions=question, criteria=list(levels))
@@ -159,22 +181,33 @@ def main() -> int:
             hits = 0
             print(f"\n== {name} ({kind}) ==")
             for text, expected in cases:
+                # 三个口径的「模型答案」类型不同, 分开命名, 只在对齐时取并集
+                result: Gold
+                # 表里 extra 的实际形状由 kind 决定, 元组表达不了这种联动,
+                # 所以每个分支按自己的题型收窄一次 (运行时数据就是这么配的)。
                 if kind == "noul":
-                    got, probability = run_noul(engine, question, extra, text)
-                    confidence = probability if got else 1 - probability
+                    verdict, probability = run_noul(
+                        engine, question, cast("Mapping[str, Any]", extra), text
+                    )
+                    result = verdict
+                    confidence = probability if verdict else 1 - probability
                     detail = (
-                        f"={'yes' if got else 'no '} "
+                        f"={'yes' if verdict else 'no '} "
                         f"金标={'yes' if expected else 'no '} P(yes)={probability:.3f}"
                     )
                 elif kind == "score":
-                    got, confidence, weighted = run_score(
-                        engine, question, extra, text
+                    level, confidence, weighted = run_score(
+                        engine, question, cast("Sequence[str]", extra), text
                     )
-                    detail = f"档位={got} 金标={expected} 加权={weighted:.2f}"
+                    result = level
+                    detail = f"档位={level} 金标={expected} 加权={weighted:.2f}"
                 else:
-                    got, confidence = run_choice(engine, question, extra, text)
-                    detail = f"={got:<8} 金标={expected:<8}"
-                hits += int(got == expected)
+                    option, confidence = run_choice(
+                        engine, question, cast("Mapping[str, Any]", extra), text
+                    )
+                    result = option
+                    detail = f"={option:<8} 金标={expected:<8}"
+                hits += int(result == expected)
                 print(f"  {detail} 置信={confidence:.2f} | {text[:48]}")
             print(f"  准确率 {hits}/{len(cases)}")
     return 0

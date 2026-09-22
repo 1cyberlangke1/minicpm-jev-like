@@ -2,6 +2,7 @@
 
 import pytest
 
+from minicpm_jev import BatchEngine
 from minicpm_jev.template import render_chat
 
 SYSTEM = "你是猫猫决策引擎, 只回答 yes 或 no。"
@@ -20,10 +21,11 @@ def test_render_rejects_bad_messages() -> None:
     with pytest.raises(ValueError):
         render_chat(_DummyModel(), [], template=b"x")
     with pytest.raises(TypeError):
-        render_chat(_DummyModel(), [{"role": "user", "content": 1}], template=b"x")
+        # 故意喂错类型的内容: 这里只放行静态检查, 运行时必须真的抛 TypeError
+        render_chat(_DummyModel(), [{"role": "user", "content": 1}], template=b"x")  # type: ignore[dict-item]
 
 
-def test_render_uses_official_template(engine) -> None:
+def test_render_uses_official_template(engine: BatchEngine) -> None:
     """渲染结果要带官方模板标记, 并以 assistant 头加预填前缀收尾."""
     rendered = engine.render(
         [
@@ -37,7 +39,7 @@ def test_render_uses_official_template(engine) -> None:
     assert rendered.endswith(b"<|im_start|>assistant\n" + "答案:".encode("utf-8"))
 
 
-def test_render_without_assistant_header(engine) -> None:
+def test_render_without_assistant_header(engine: BatchEngine) -> None:
     """add_assistant=False 时不该补 assistant 头."""
     rendered = engine.render(
         [

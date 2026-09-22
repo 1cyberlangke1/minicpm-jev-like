@@ -50,5 +50,8 @@ def test_error_body_shape_is_official() -> None:
         guard.check("Bearer nope")
     detail = error.value.detail()
     assert set(detail) == {"detail"}
-    assert detail["detail"]["error_type"] == "authentication_error"
-    assert "API key" in detail["detail"]["message"]
+    # detail 字段在基类里是 dict、在 422 那类里是数组, 所以这里先按运行时形状收窄
+    body = detail["detail"]
+    assert isinstance(body, dict)
+    assert body["error_type"] == "authentication_error"
+    assert "API key" in body["message"]

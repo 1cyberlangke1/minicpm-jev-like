@@ -24,6 +24,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 BASE = "https://api.typesafe.ai"
 ROOT = Path(__file__).resolve().parents[1]
@@ -242,7 +243,7 @@ PRESETS = (
 )
 
 
-def _oversized_questions() -> dict:
+def _oversized_questions() -> dict[str, Any]:
     """256 个候选: 探官方 255 上限的报错形态."""
     return {
         "too_many": {
@@ -254,7 +255,7 @@ def _oversized_questions() -> dict:
 
 
 def _call(method: str, path: str, *, key: str | None,
-          body: dict | None = None) -> tuple[int, dict]:
+          body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
     """发一次请求, 返回 (HTTP 状态码, 响应体).
 
     输入: method/path/key/body; key=None 表示不带 Authorization 头;
@@ -280,10 +281,10 @@ def _call(method: str, path: str, *, key: str | None,
     return status, parsed
 
 
-def _save(name: str, endpoint: str, request_body: dict | None, status: int,
-          body: dict, notes: dict | None = None) -> None:
+def _save(name: str, endpoint: str, request_body: dict[str, Any] | None, status: int,
+          body: dict[str, Any], notes: dict[str, Any] | None = None) -> None:
     """写一个 dump 文件 (含请求与响应, 不含任何密钥)."""
-    payload: dict = {
+    payload: dict[str, Any] = {
         "endpoint": endpoint,
         "request": request_body,
         "status": status,

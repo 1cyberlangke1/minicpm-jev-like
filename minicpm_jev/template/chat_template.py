@@ -31,7 +31,8 @@ def get_chat_template(model: object) -> bytes:
     输出: 模板字节串
     预期: 元数据里没有模板时抛 ChatTemplateError, 绝不裸文本回退
     """
-    template = llama_cpp.llama_model_chat_template(model.model, None)  # type: ignore[attr-defined]
+    # 绑定层返回 Any, 在这里钉成 bytes, 免得 Any 顺着返回值漏到调用方
+    template: bytes = llama_cpp.llama_model_chat_template(model.model, None)  # type: ignore[attr-defined]
     if not template:
         raise ChatTemplateError("GGUF 元数据里没有 tokenizer.chat_template, 拒绝裸文本回退")
     return template

@@ -13,7 +13,7 @@ from .device import (
     reset_device_lock,
     validate_n_ctx,
 )
-from .engine import BatchEngine, EngineConfig
+from .engine import BatchEngine, EngineConfig, ScoringEngine
 
 __all__ = [
     "DEFAULT_N_CTX",
@@ -22,6 +22,7 @@ __all__ = [
     "Device",
     "EngineConfig",
     "EngineError",
+    "ScoringEngine",
     "acquire_device",
     "reset_device_lock",
     "validate_n_ctx",

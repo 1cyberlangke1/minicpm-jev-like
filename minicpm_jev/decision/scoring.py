@@ -29,7 +29,7 @@ from typing import Any
 
 from ..chunking import DEFAULT_CHUNK_SIZE, Chunk, align_chunks, plan_chunks
 from ..labels import BOOL_LABEL_SPECS, LabelSet, resolve_labels
-from ..runtime import BatchEngine
+from ..runtime import ScoringEngine
 from ..template import render_entry
 from .confidence import normalized_peak
 from .primitives import (
@@ -237,7 +237,7 @@ class _Plan:
 
 
 def _plan_noul(
-    engine: BatchEngine, state: Any, question: Noul, think_tokens: int = 0
+    engine: ScoringEngine, state: Any, question: Noul, think_tokens: int = 0
 ) -> _Plan:
     """noul 规划: 一条序列, 标签是 yes/no 全书写变体组.
 
@@ -257,7 +257,7 @@ def _plan_noul(
 
 
 def _plan_choice(
-    engine: BatchEngine,
+    engine: ScoringEngine,
     state: Any,
     question: Choice,
     chunk_size: int,
@@ -297,7 +297,7 @@ def _plan_choice(
 
 
 def _plan_score(
-    engine: BatchEngine, state: Any, question: Score, think_tokens: int = 0
+    engine: ScoringEngine, state: Any, question: Score, think_tokens: int = 0
 ) -> _Plan:
     """score 规划: 一条序列, 档位编号 0~M-1 天然单块 (不带锚点)."""
     level_count = len(question.criteria)
@@ -326,7 +326,7 @@ def _plan_score(
 
 
 def _plan(
-    engine: BatchEngine,
+    engine: ScoringEngine,
     state: Any,
     question: Question,
     chunk_size: int,
@@ -343,7 +343,7 @@ def _plan(
 
 
 def answer_all(
-    engine: BatchEngine,
+    engine: ScoringEngine,
     state: Any,
     questions: Mapping[str, Question],
     *,
@@ -398,7 +398,7 @@ def answer_all(
 
 
 def answer(
-    engine: BatchEngine,
+    engine: ScoringEngine,
     state: Any,
     question: Question,
     *,
@@ -422,7 +422,7 @@ def answer(
     )["question"]
 
 
-def answer_noul(engine: BatchEngine, state: Any, question: Noul) -> NoulAnswer:
+def answer_noul(engine: ScoringEngine, state: Any, question: Noul) -> NoulAnswer:
     """noul 单题便捷入口. 输出: NoulAnswer (noul = P(yes))."""
     result = answer(engine, state, question)
     if not isinstance(result, NoulAnswer):  # pragma: no cover - 类型收窄
@@ -431,7 +431,7 @@ def answer_noul(engine: BatchEngine, state: Any, question: Noul) -> NoulAnswer:
 
 
 def answer_choice(
-    engine: BatchEngine,
+    engine: ScoringEngine,
     state: Any,
     question: Choice,
     *,
@@ -444,7 +444,7 @@ def answer_choice(
     return result
 
 
-def answer_score(engine: BatchEngine, state: Any, question: Score) -> ScoreAnswer:
+def answer_score(engine: ScoringEngine, state: Any, question: Score) -> ScoreAnswer:
     """score 单题便捷入口. 输出: ScoreAnswer (score = Σ p_i · i)."""
     result = answer(engine, state, question)
     if not isinstance(result, ScoreAnswer):  # pragma: no cover - 类型收窄

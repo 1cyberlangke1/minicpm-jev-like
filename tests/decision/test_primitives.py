@@ -38,7 +38,7 @@ def test_choice_requires_non_empty_mapping() -> None:
     with pytest.raises(QuestionError):
         Choice(instructions="pick", criteria={})
     with pytest.raises(QuestionError):
-        Choice(instructions="pick", criteria=["a", "b"])
+        Choice(instructions="pick", criteria=["a", "b"])  # type: ignore[arg-type]
 
 
 

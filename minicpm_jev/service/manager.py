@@ -15,14 +15,18 @@ from collections.abc import Callable
 from typing import Protocol
 
 from ..config import Settings
-from ..runtime import BatchEngine, EngineConfig
+from ..runtime import BatchEngine, EngineConfig, ScoringEngine
 from .registry import ModelRegistry
 
 __all__ = ["EngineFactory", "EngineLike", "EngineManager"]
 
 
-class EngineLike(Protocol):
-    """管理器用到的引擎最小接口 (只有 close)."""
+class EngineLike(ScoringEngine, Protocol):
+    """管理器手里那台引擎的接口: 决策层用到的那几项 + 能关掉.
+
+    预期: 服务层拿到 ``ensure()`` 的返回值就能直接喂给 ``answer_all``, 不需要
+          再向下转型成真 ``BatchEngine`` (包装/假引擎同样合法)。
+    """
 
     def close(self) -> None:
         """释放底层资源."""
