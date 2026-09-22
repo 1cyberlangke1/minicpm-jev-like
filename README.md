@@ -114,7 +114,10 @@ node web/server.mjs  # 托管静态文件，并把 /v1/* 转给后端
 
 ```powershell
 .venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
+.venv\Scripts\python.exe -m mypy
 ```
+
+类型检查读仓库根目录的 `mypy.ini`，严格模式，覆盖 `minicpm_jev/`、`tests/`、`examples/`、`scripts/` 四处。
 
 ## 工程目录结构
 
