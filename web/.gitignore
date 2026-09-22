@@ -1,0 +1,6 @@
+# 依赖与构建产物不入库: dist/ 由 `npm run build` 现场生成, 哈希文件名会变
+node_modules/
+dist/
+
+# 本地覆盖配置 (Vite 约定)
+*.local

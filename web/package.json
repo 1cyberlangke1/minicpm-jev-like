@@ -1,0 +1,23 @@
+{
+  "name": "minicpm-jev-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone web console for the minicpm_jev System One engine.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "serve": "node server.mjs"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.2",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^26.6.2",
+    "puppeteer-core": "^25.11.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}

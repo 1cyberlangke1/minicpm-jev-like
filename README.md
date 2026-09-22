@@ -66,6 +66,30 @@ curl.exe -s http://127.0.0.1:8000/v1/systemone -H "Content-Type: application/jso
 
 多个决策问题可统一写入 `questions` 映射表，`state` 作为共用前置背景信息。端到端请求与响应结构详见 `examples/systemone_http.py`。
 
+## Web 决策台
+
+`web/` 是独立部署的浏览器控制台，与后端进程完全解耦：它只按 HTTP 契约访问 `/v1/systemone`，后端不挂载、不感知它的存在，换任何语言实现的后端都能直接连。
+
+```powershell
+cd web
+npm install
+npm run dev          # http://127.0.0.1:5273，/v1/* 由开发服务器转发到后端
+```
+
+产出静态包后用零依赖进程托管（纯 Node 标准库，无第三方运行时依赖）：
+
+```powershell
+npm run build        # 产物落在 web/dist/
+node web/server.mjs  # 静态托管 + /v1/* 反向代理
+```
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WEB_HOST` / `WEB_PORT` | `127.0.0.1` / `5273` | web 服务监听地址 |
+| `JEV_BACKEND` | `http://127.0.0.1:8000` | 决策引擎后端地址 |
+
+技术栈为 Vite + Preact + `@preact/signals`，不引入组件库，样式是手写设计令牌（深浅两套主题、桌面与窄屏两档断点）。界面提供 `noul` 环形概率、`choice` / `score` 条形分布与加权分读数，支持表单与原始 JSON 两种编辑模式（原始模式同时接受界面导出格式与官方线上格式，`choice` / `noul` 的 `{候选: 描述}` 对象和 `score` 的字符串数组都能直接粘进来）、`think_tokens` 思考预算滑杆、示例一键载入、请求与响应原文对照、中英双语；非法输入在客户端拦截，服务端 `422` 字段错误数组原样摊开，不做静默回退。
+
 ## 场景示例
 
 `examples/` 目录下提供以下场景的可执行验证脚本：
@@ -106,6 +130,7 @@ minicpm_jev/
 scripts/      模型权重获取、CUDA 动态库编译脚本与批处理基准测试工具
 tests/        自动化单元测试矩阵与官方接口契约对照验证
 examples/     完整应用场景演示代码
+web/          独立部署的浏览器决策台（仅按 HTTP 契约通信，不与后端共享代码）
 img/          控制台运行实况动态演示图
 ```
 
